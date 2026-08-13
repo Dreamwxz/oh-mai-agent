@@ -28,7 +28,7 @@ from ..tools.agent.ask_tool import build_ask_tool
 from ..tools.agent.file_tools import build_file_tools
 from ..tools.agent.info_tools import build_info_tools
 from ..tools.agent.plugin_api_tools import refresh_plugin_api_tools
-from ..tools.agent.send_tool import build_send_tool
+from ..tools.send_message import build_send_tool
 from ..tools.agent.subagent_tool import build_subagent_tool, build_subagents_tool
 from ..tools.registry import ToolDefinition, ToolRegistry
 
@@ -190,17 +190,20 @@ class TaskManager:
             self._registry.register(tool)
 
         # ── 5. send_message 工具（升级版） ──────────────────────────
-        # send_polished 回调委托 send_final_reply 执行润色 + 指数退避重试发送
+        # send_polished 回调委托 send_final_reply 执行润色 + 指数退避重试发送，
+        # polish/split 可选项由 send_message 工具参数透传
         from ..executor.instant import send_final_reply
 
         async def _send_polished(
             text: str, stream_id: str, is_group: bool,
+            *, polish: bool = True, split: bool = True,
         ) -> None:
             await send_final_reply(
                 text, stream_id,
                 self._ctx, self._config, self._prompt_manager,
                 self._prompt_service,
                 max_retries=3, is_group=is_group,
+                polish=polish, split=split,
             )
 
         send_msg_tool = build_send_tool(

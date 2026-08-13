@@ -10,7 +10,7 @@ from tests.conftest import MockCtx
 from oh_mai_agent.permission import Role
 from oh_mai_agent.prompt.builders.context_note import ContextNoteBuilder
 from oh_mai_agent.prompt.service import PromptService
-from oh_mai_agent.tools.agent.send_tool import build_send_tool
+from oh_mai_agent.tools.send_message import build_send_tool
 
 
 def _make_prompt_service() -> PromptService:
@@ -34,7 +34,7 @@ class TestBuildSendTool:
         """给定 MockCtx 与 no-op 的 send_polished，build_send_tool 返回名为 send_message 的 ToolDefinition。"""
         ctx = MockCtx()
 
-        async def _noop(text: str, stream_id: str, is_group: bool) -> None:
+        async def _noop(text: str, stream_id: str, is_group: bool, **kwargs: Any) -> None:
             pass
 
         tool = build_send_tool(ctx, send_polished=_noop)
@@ -46,7 +46,7 @@ class TestBuildSendTool:
         """工具描述包含转达纪律（委托人/转达关键词）。"""
         ctx = MockCtx()
 
-        async def _noop(text: str, stream_id: str, is_group: bool) -> None:
+        async def _noop(text: str, stream_id: str, is_group: bool, **kwargs: Any) -> None:
             pass
 
         tool = build_send_tool(ctx, send_polished=_noop)
@@ -66,7 +66,7 @@ class TestSendMessageGroupId:
         ctx = MockCtx()
         polish_calls: list[dict] = []
 
-        async def _record_polish(text: str, stream_id: str, is_group: bool) -> None:
+        async def _record_polish(text: str, stream_id: str, is_group: bool, **kwargs: Any) -> None:
             polish_calls.append({"text": text, "stream_id": stream_id, "is_group": is_group})
 
         tool = build_send_tool(ctx, send_polished=_record_polish, prompt_service=_make_prompt_service())
@@ -105,7 +105,7 @@ class TestSendMessageUserId:
         ctx = MockCtx()
         polish_calls: list[dict] = []
 
-        async def _record_polish(text: str, stream_id: str, is_group: bool) -> None:
+        async def _record_polish(text: str, stream_id: str, is_group: bool, **kwargs: Any) -> None:
             polish_calls.append({"text": text, "stream_id": stream_id, "is_group": is_group})
 
         tool = build_send_tool(ctx, send_polished=_record_polish)
@@ -125,7 +125,7 @@ class TestSendMessagePlatform:
         ctx = MockCtx()
         polish_calls: list[dict] = []
 
-        async def _record_polish(text: str, stream_id: str, is_group: bool) -> None:
+        async def _record_polish(text: str, stream_id: str, is_group: bool, **kwargs: Any) -> None:
             polish_calls.append({"text": text, "stream_id": stream_id, "is_group": is_group})
 
         tool = build_send_tool(ctx, send_polished=_record_polish)
@@ -147,7 +147,7 @@ class TestSendMessageValidation:
         ctx = MockCtx()
         polish_calls: list[dict] = []
 
-        async def _record_polish(text: str, stream_id: str, is_group: bool) -> None:
+        async def _record_polish(text: str, stream_id: str, is_group: bool, **kwargs: Any) -> None:
             polish_calls.append({})
 
         tool = build_send_tool(ctx, send_polished=_record_polish)
@@ -163,7 +163,7 @@ class TestSendMessageValidation:
         ctx = MockCtx()
         polish_calls: list[dict] = []
 
-        async def _record_polish(text: str, stream_id: str, is_group: bool) -> None:
+        async def _record_polish(text: str, stream_id: str, is_group: bool, **kwargs: Any) -> None:
             polish_calls.append({})
 
         tool = build_send_tool(ctx, send_polished=_record_polish)
@@ -178,7 +178,7 @@ class TestSendMessageValidation:
         """text 为空时，handler 返回 success=False。"""
         ctx = MockCtx()
 
-        async def _noop(text: str, stream_id: str, is_group: bool) -> None:
+        async def _noop(text: str, stream_id: str, is_group: bool, **kwargs: Any) -> None:
             pass
 
         tool = build_send_tool(ctx, send_polished=_noop)
@@ -208,7 +208,7 @@ class TestSendMessageErrorPropagation:
         try:
             polish_calls: list[dict] = []
 
-            async def _record_polish(text: str, stream_id: str, is_group: bool) -> None:
+            async def _record_polish(text: str, stream_id: str, is_group: bool, **kwargs: Any) -> None:
                 polish_calls.append({})
 
             tool = build_send_tool(ctx, send_polished=_record_polish)
@@ -225,7 +225,7 @@ class TestSendMessageErrorPropagation:
         """send_polished 抛异常时，handler 返回 success=False 及错误信息。"""
         ctx = MockCtx()
 
-        async def _raise_err(text: str, stream_id: str, is_group: bool) -> None:
+        async def _raise_err(text: str, stream_id: str, is_group: bool, **kwargs: Any) -> None:
             raise RuntimeError("send failed")
 
         tool = build_send_tool(ctx, send_polished=_raise_err)
@@ -247,7 +247,7 @@ class TestSendMessageContextNote:
         ctx = MockCtx()
         polish_calls: list[dict] = []
 
-        async def _record_polish(text: str, stream_id: str, is_group: bool) -> None:
+        async def _record_polish(text: str, stream_id: str, is_group: bool, **kwargs: Any) -> None:
             polish_calls.append({"text": text, "stream_id": stream_id, "is_group": is_group})
 
         async def _append_raises(**kwargs: object) -> None:
@@ -270,7 +270,7 @@ class TestSendMessageContextNote:
         ctx = MockCtx()
         polish_calls: list[dict] = []
 
-        async def _record_polish(text: str, stream_id: str, is_group: bool) -> None:
+        async def _record_polish(text: str, stream_id: str, is_group: bool, **kwargs: Any) -> None:
             polish_calls.append({})
 
         tool = build_send_tool(ctx, send_polished=_record_polish, prompt_service=_make_prompt_service())
@@ -312,7 +312,7 @@ class TestSendMessageObjectResult:
         try:
             polish_calls: list[dict] = []
 
-            async def _record_polish(text: str, stream_id: str, is_group: bool) -> None:
+            async def _record_polish(text: str, stream_id: str, is_group: bool, **kwargs: Any) -> None:
                 polish_calls.append({"text": text, "stream_id": stream_id, "is_group": is_group})
 
             tool = build_send_tool(ctx, send_polished=_record_polish)
@@ -346,7 +346,7 @@ class TestSendMessageOpenSessionCalled:
         }]
         polish_calls: list[dict] = []
 
-        async def _record_polish(text: str, stream_id: str, is_group: bool) -> None:
+        async def _record_polish(text: str, stream_id: str, is_group: bool, **kwargs: Any) -> None:
             polish_calls.append({"text": text, "stream_id": stream_id, "is_group": is_group})
 
         tool = build_send_tool(ctx, send_polished=_record_polish)
@@ -378,7 +378,7 @@ class TestSendMessageOpenSessionCalled:
         }]
         polish_calls: list[dict] = []
 
-        async def _record_polish(text: str, stream_id: str, is_group: bool) -> None:
+        async def _record_polish(text: str, stream_id: str, is_group: bool, **kwargs: Any) -> None:
             polish_calls.append({"text": text, "stream_id": stream_id, "is_group": is_group})
 
         tool = build_send_tool(ctx, send_polished=_record_polish)
@@ -399,7 +399,7 @@ class TestSendMessageOpenSessionCalled:
         """open_session 返回 created=False 时，handler 返回 created=False。"""
         ctx = MockCtx()
 
-        async def _record_polish(text: str, stream_id: str, is_group: bool) -> None:
+        async def _record_polish(text: str, stream_id: str, is_group: bool, **kwargs: Any) -> None:
             pass
 
         orig_open = MockCtx._Chat.open_session
@@ -439,7 +439,7 @@ class TestSendMessageAccountIdScope:
         }]
         polish_calls: list[dict] = []
 
-        async def _record_polish(text: str, stream_id: str, is_group: bool) -> None:
+        async def _record_polish(text: str, stream_id: str, is_group: bool, **kwargs: Any) -> None:
             polish_calls.append({"text": text, "stream_id": stream_id, "is_group": is_group})
 
         tool = build_send_tool(ctx, send_polished=_record_polish)
@@ -466,7 +466,7 @@ class TestSendMessageAccountIdScope:
         }]
         polish_calls: list[dict] = []
 
-        async def _record_polish(text: str, stream_id: str, is_group: bool) -> None:
+        async def _record_polish(text: str, stream_id: str, is_group: bool, **kwargs: Any) -> None:
             polish_calls.append({"text": text, "stream_id": stream_id, "is_group": is_group})
 
         tool = build_send_tool(ctx, send_polished=_record_polish)
@@ -499,7 +499,7 @@ class TestSendMessageAccountIdScope:
             },
         ]
 
-        async def _record_polish(text: str, stream_id: str, is_group: bool) -> None:
+        async def _record_polish(text: str, stream_id: str, is_group: bool, **kwargs: Any) -> None:
             pass
 
         tool = build_send_tool(ctx, send_polished=_record_polish)
@@ -523,7 +523,7 @@ class TestSendMessageAccountIdScope:
         }]
         polish_calls: list[dict] = []
 
-        async def _record_polish(text: str, stream_id: str, is_group: bool) -> None:
+        async def _record_polish(text: str, stream_id: str, is_group: bool, **kwargs: Any) -> None:
             polish_calls.append({"text": text, "stream_id": stream_id, "is_group": is_group})
 
         tool = build_send_tool(ctx, send_polished=_record_polish)
@@ -541,7 +541,7 @@ class TestSendMessageAccountIdScope:
         ctx._chat_streams = []
         polish_calls: list[dict] = []
 
-        async def _record_polish(text: str, stream_id: str, is_group: bool) -> None:
+        async def _record_polish(text: str, stream_id: str, is_group: bool, **kwargs: Any) -> None:
             polish_calls.append({"text": text, "stream_id": stream_id, "is_group": is_group})
 
         tool = build_send_tool(ctx, send_polished=_record_polish)
@@ -558,7 +558,7 @@ class TestSendMessageAccountIdScope:
         ctx = MockCtx()
         polish_calls: list[dict] = []
 
-        async def _record_polish(text: str, stream_id: str, is_group: bool) -> None:
+        async def _record_polish(text: str, stream_id: str, is_group: bool, **kwargs: Any) -> None:
             polish_calls.append({})
 
         orig_all = MockCtx._Chat.get_all_streams
@@ -591,7 +591,7 @@ class TestSendMessageAccountIdScope:
             "chat_type": "private",
         }]
 
-        async def _record_polish(text: str, stream_id: str, is_group: bool) -> None:
+        async def _record_polish(text: str, stream_id: str, is_group: bool, **kwargs: Any) -> None:
             pass
 
         tool = build_send_tool(ctx, send_polished=_record_polish)
@@ -599,3 +599,142 @@ class TestSendMessageAccountIdScope:
 
         assert len(ctx.chat._stream_lookup_calls) == 0
         assert len(ctx.chat._open_session_calls) == 1
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# stream_id 直发 —— 发送到指定聊天流（如其他用户的流），跳过建流
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestSendMessageStreamId:
+    @pytest.mark.asyncio
+    async def test_stream_id_sends_directly_without_open_session(self) -> None:
+        """提供 stream_id 时直接发送到该流，不调用 open_session。"""
+        ctx = MockCtx()
+        polish_calls: list[dict] = []
+
+        async def _record_polish(text: str, stream_id: str, is_group: bool, **kwargs: Any) -> None:
+            polish_calls.append({"text": text, "stream_id": stream_id, "is_group": is_group})
+
+        tool = build_send_tool(ctx, send_polished=_record_polish, prompt_service=_make_prompt_service())
+        result = await tool.handler(text="Hello", stream_id="qq:user:99999")
+
+        assert result["success"] is True
+        assert result["stream_id"] == "qq:user:99999"
+        assert result["created"] is False
+        assert len(ctx.chat._open_session_calls) == 0
+        assert len(polish_calls) == 1
+        assert polish_calls[0]["text"] == "Hello"
+        assert polish_calls[0]["stream_id"] == "qq:user:99999"
+        assert polish_calls[0]["is_group"] is False
+        # 上下文记录照常（纯文本 + XML）
+        assert len(ctx.maisaka.appends) == 2
+        assert ctx.maisaka.appends[0]["stream_id"] == "qq:user:99999"
+        assert ctx.maisaka.appends[1]["stream_id"] == "qq:user:99999"
+
+    @pytest.mark.asyncio
+    async def test_stream_id_group_detection(self) -> None:
+        """流 ID 含 ':group:' 时按群聊推导 is_group=True。"""
+        ctx = MockCtx()
+        polish_calls: list[dict] = []
+
+        async def _record_polish(text: str, stream_id: str, is_group: bool, **kwargs: Any) -> None:
+            polish_calls.append({"is_group": is_group})
+
+        tool = build_send_tool(ctx, send_polished=_record_polish)
+        await tool.handler(text="Hello", stream_id="qq:group:88888")
+
+        assert polish_calls[0]["is_group"] is True
+
+    @pytest.mark.asyncio
+    async def test_stream_id_conflicts_with_group_user(self) -> None:
+        """stream_id 与 group_id/user_id 同时提供时返回错误。"""
+        ctx = MockCtx()
+
+        async def _noop(text: str, stream_id: str, is_group: bool, **kwargs: Any) -> None:
+            pass
+
+        tool = build_send_tool(ctx, send_polished=_noop)
+        result = await tool.handler(text="Hello", stream_id="qq:user:1", group_id="2")
+        assert result["success"] is False
+        assert "只能提供其一" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_missing_target_reports_error(self) -> None:
+        """未提供任何目标（stream_id/group_id/user_id 全空）时返回错误。"""
+        ctx = MockCtx()
+
+        async def _noop(text: str, stream_id: str, is_group: bool, **kwargs: Any) -> None:
+            pass
+
+        tool = build_send_tool(ctx, send_polished=_noop)
+        result = await tool.handler(text="Hello")
+        assert result["success"] is False
+        assert "stream_id" in result["error"]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# polish / split 可选项 —— 透传给 send_polished 回调
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestSendMessageOptionalFlags:
+    @pytest.mark.asyncio
+    async def test_polish_and_split_forwarded_to_callback(self) -> None:
+        """polish/split 参数透传给 send_polished（缺省均为 true）。"""
+        ctx = MockCtx()
+        polish_calls: list[dict] = []
+
+        async def _record_polish(text: str, stream_id: str, is_group: bool, **kwargs: Any) -> None:
+            polish_calls.append(kwargs)
+
+        tool = build_send_tool(ctx, send_polished=_record_polish)
+        await tool.handler(text="Hello", user_id="67890")
+
+        assert polish_calls[0]["polish"] is True
+        assert polish_calls[0]["split"] is True
+
+    @pytest.mark.asyncio
+    async def test_polish_false_and_split_false_forwarded(self) -> None:
+        """polish=false / split=false 时透传 false。"""
+        ctx = MockCtx()
+        polish_calls: list[dict] = []
+
+        async def _record_polish(text: str, stream_id: str, is_group: bool, **kwargs: Any) -> None:
+            polish_calls.append(kwargs)
+
+        tool = build_send_tool(ctx, send_polished=_record_polish)
+        await tool.handler(text="Hello", user_id="67890", polish=False, split=False)
+
+        assert polish_calls[0]["polish"] is False
+        assert polish_calls[0]["split"] is False
+
+    @pytest.mark.asyncio
+    async def test_string_bool_values_normalized(self) -> None:
+        """LLM 传字符串 "false"/"true" 时归一化为布尔值。"""
+        ctx = MockCtx()
+        polish_calls: list[dict] = []
+
+        async def _record_polish(text: str, stream_id: str, is_group: bool, **kwargs: Any) -> None:
+            polish_calls.append(kwargs)
+
+        tool = build_send_tool(ctx, send_polished=_record_polish)
+        await tool.handler(text="Hello", user_id="67890", polish="false", split="true")
+
+        assert polish_calls[0]["polish"] is False
+        assert polish_calls[0]["split"] is True
+
+    @pytest.mark.asyncio
+    async def test_send_failure_returns_error(self) -> None:
+        """send_polished 抛异常时返回失败结果（重试已由回调内部处理）。"""
+        ctx = MockCtx()
+
+        async def _raise_err(text: str, stream_id: str, is_group: bool, **kwargs: Any) -> None:
+            raise RuntimeError("发送失败")
+
+        tool = build_send_tool(ctx, send_polished=_raise_err)
+        result = await tool.handler(text="Hello", user_id="67890")
+
+        assert result["success"] is False
+        assert "发送失败" in result["error"]
+        assert len(ctx.maisaka.appends) == 0

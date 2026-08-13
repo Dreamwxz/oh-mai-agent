@@ -8,8 +8,9 @@
 （guest / user / admin）过滤。
 
 子包：
-  - agent/      Agent 循环内工具（info_tools / file_tools / ask_tool / send_tool / plugin_api_tools / task_mgmt）
-  - planner/    暴露给主 Planner 的 @Tool handler 工厂（search_users / task_tools / send_message）
+  - agent/      Agent 循环内工具（info_tools / file_tools / ask_tool / plugin_api_tools / task_mgmt）
+  - planner/    暴露给主 Planner 的 @Tool handler 工厂（search_users / task_tools）
+  - send_message.py  发送工具共用实现（Agent 循环 + Planner 两个入口共享核心）
   - synthetic/  Agent 循环合成发现工具（list_tools / get_tool_schema）
   - mcp/        MCP 工具提供方（connection 协议客户端 + provider 管理器）
 """

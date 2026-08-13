@@ -118,7 +118,7 @@ class MaibotAgentPlugin(MaiBotPlugin):
                 from .tools.planner.search_users import build_search_users_handler
                 self._planner_tool_cache[name] = build_search_users_handler(self.ctx, self.config)
             elif name == "send_message":
-                from .tools.planner.send_message import build_send_message_handler
+                from .tools.send_message import build_send_message_handler
                 self._planner_tool_cache[name] = build_send_message_handler(self.ctx, self.config, self._pm, self._pm_service)
             else:
                 from .tools.planner.task_tools import build_task_tools
@@ -364,7 +364,10 @@ class MaibotAgentPlugin(MaiBotPlugin):
 
     @Tool(
         "send_message",
-        description="向好友/群发送消息。转达他人之言必须点明委托人。",
+        description=(
+            "向好友/群发送消息（自动创建聊天流、默认润色与长文本分割）。"
+            "转达他人之言必须点明委托人。"
+        ),
         visibility="deferred",
         parameters=[
             ToolParameterInfo(
@@ -372,6 +375,12 @@ class MaibotAgentPlugin(MaiBotPlugin):
                 param_type=ToolParamType.STRING,
                 description="要发送的消息文本",
                 required=True,
+            ),
+            ToolParameterInfo(
+                name="stream_id",
+                param_type=ToolParamType.STRING,
+                description="目标聊天流 ID（与 group_id/user_id 三选一，提供时直接发送到该流，如其他用户的流）",
+                required=False,
             ),
             ToolParameterInfo(
                 name="group_id",
@@ -389,6 +398,18 @@ class MaibotAgentPlugin(MaiBotPlugin):
                 name="platform",
                 param_type=ToolParamType.STRING,
                 description="平台标识（可选，默认 qq）",
+                required=False,
+            ),
+            ToolParameterInfo(
+                name="polish",
+                param_type=ToolParamType.BOOLEAN,
+                description="是否 LLM 润色（可选，默认 true；发代码/命令等不希望改写时设 false）",
+                required=False,
+            ),
+            ToolParameterInfo(
+                name="split",
+                param_type=ToolParamType.BOOLEAN,
+                description="是否分割长文本为多条消息（可选，默认 true；希望整条完整呈现时设 false）",
                 required=False,
             ),
         ],

@@ -43,10 +43,10 @@ Discoverable 层的入口是两个始终呈现的合成工具（tools/synthetic/
 - 信息获取（tools/agent/info_tools.py:33）：6 个 discoverable 工具（search_memory / fetch_history / query_person / search_users / get_frequency / list_plugin_tools），GUEST 可访问。
 - 文件读写（tools/agent/file_tools.py:50）：`read_file` / `write_file`，user 级隔离到 `data_dir/files/` 沙箱，admin 可开 `admin_open` 绕过。
 - 提问（tools/agent/ask_tool.py:22）：`ask_user`，唯一 Essential 工具。
-- 消息发送（tools/agent/send_tool.py:26）：`send_message` 升级版，按 group_id/user_id 建流 + 润色 + 重试。
+- 消息发送（tools/send_message.py：`build_send_tool`）：`send_message`，目标三选一 —— `stream_id` 直发指定聊天流（如其他用户的流，跳过建流）或 `group_id`/`user_id` 建流，默认润色 + 长文本分割，`polish`/`split` 可选项按场景关闭。
 - 跨插件 API（tools/agent/plugin_api_tools.py）：扫描 `ctx.api.list()` 动态生成 `call_{api_name}` 工具。
 
-**Planner 通道（tools/planner/）**。主 Planner 通过 9 个 `@Tool` 装饰器（plugin.py:132/165/222/246/267/297/318/339/376）看到的安全子集。handler 全部懒构建（`_get_planner_tool`，plugin.py:112-126）：`search_users` 与 `send_message` 走独立工厂，7 个 `task_*` 经 `build_task_tools(self._task_manager)`（tools/planner/task_tools.py:30-311）从 TaskManager 门面取。Planner 调用者角色恒为 ADMIN（`_planner_caller_role`，task_tools.py:25-27），owner 标识为 `planner:{stream_id}`（20-22）。
+**Planner 通道（tools/planner/）**。主 Planner 通过 9 个 `@Tool` 装饰器（plugin.py:132/165/222/246/267/297/318/339/376）看到的安全子集。handler 全部懒构建（`_get_planner_tool`，plugin.py:112-126）：`search_users` 走独立工厂，`send_message` 与 Agent 循环版共用 `tools/send_message.py` 的实现，7 个 `task_*` 经 `build_task_tools(self._task_manager)`（tools/planner/task_tools.py:30-311）从 TaskManager 门面取。Planner 调用者角色恒为 ADMIN（`_planner_caller_role`，task_tools.py:25-27），owner 标识为 `planner:{stream_id}`（20-22）。
 
 **Synthetic 通道（tools/synthetic/）**。`list_tools` / `get_tool_schema` 两个发现工具，见上文。
 
@@ -75,7 +75,7 @@ Discoverable 层的入口是两个始终呈现的合成工具（tools/synthetic/
 | 6 | `task_delete` | plugin.py:297 | 取消/删除任务 |
 | 7 | `task_history` | plugin.py:318 | 查看任务执行历史 |
 | 8 | `task_schedule` | plugin.py:339 | 创建定时任务（cron 表达式） |
-| 9 | `send_message` | plugin.py:376 | 向好友/群发送消息（自动建流 + 润色 + 重试） |
+| 9 | `send_message` | plugin.py:376 | 向好友/群/指定聊天流发送消息（目标三选一，默认润色 + 长文本分割） |
 
 ### 工具权限
 
