@@ -1,0 +1,12 @@
+{
+  "templates": {
+    "agent_system": {"path": "agent_system.md", "variables": ["title", "intent"]},
+    "classify_level": {"path": "classify_level.md", "variables": ["intent"]},
+    "title": {"path": "title.md", "variables": ["intent"]},
+    "polish": {"path": "polish.md", "variables": ["context", "jargon", "result", "kind", "requester"]},
+    "planner_board": {"path": "planner_board.md", "variables": ["session_id", "active", "scheduled", "recent"]},
+    "injection": {"path": "injection.md", "variables": ["instruction", "note_id"]},
+    "context_note": {"path": "context_note.md", "variables": ["kind", "content", "note_id"]},
+    "subagent_system": {"path": "subagent_system.md", "variables": ["intent", "tool_list"]}
+  }
+}

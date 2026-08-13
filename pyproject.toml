@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=64.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "oh-mai-agent"
+version = "0.1.0"
+description = "MaiBot 离线多线程 Agent 插件：任务分级管理、定时任务、MCP 工具、跨插件协作"
+requires-python = ">=3.10"
+dependencies = [
+    "croniter>=2.0.0",
+    "jinja2>=3.1",
+    "mcp-server-fetch>=2025.4.7",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--junitxml=test-results/junit.xml"

@@ -1,0 +1,64 @@
+{
+  "manifest_version": 2,
+  "version": "0.1.0",
+  "name": "离线多线程 Agent 插件（Oh-Mai-Agent）",
+  "description": "离线多线程 Agent 插件：两级任务模型（essential/planner）、定时任务（cron/delay）、MCP 工具集成、跨插件协作、Planner 任务看板",
+  "author": {
+    "name": "Dreamwxz",
+    "url": "https://github.com/Dreamwxz"
+  },
+  "license": "GPL-v3.0-or-later",
+  "urls": {
+    "repository": "https://github.com/Dreamwxz/oh-mai-agent",
+    "homepage": "https://github.com/Dreamwxz",
+    "documentation": "https://github.com/Dreamwxz/oh-mai-agent",
+    "issues": "https://github.com/Dreamwxz/oh-mai-agent/issues"
+  },
+  "host_application": {
+    "min_version": "1.0.0",
+    "max_version": "99.99.99"
+  },
+  "sdk": {
+    "min_version": "2.6.0",
+    "max_version": "2.99.99"
+  },
+  "dependencies": [
+    {
+      "type": "python_package",
+      "name": "croniter",
+      "version_spec": ">=2.0.0"
+    },
+    {
+      "type": "python_package",
+      "name": "jinja2",
+      "version_spec": ">=3.1"
+    },
+    {
+      "type": "python_package",
+      "name": "mcp-server-fetch",
+      "version_spec": ">=2025.4.7"
+    }
+  ],
+  "capabilities": [
+    "send.text",
+    "llm.generate",
+    "llm.generate_with_tools",
+    "config.get",
+    "database.query",
+    "message.get_recent",
+    "chat.get_all_streams",
+    "person.get_id_by_name",
+    "frequency.get_current_talk_value",
+    "knowledge.search",
+    "tool.get_definitions",
+    "api.call",
+    "api.list",
+    "maisaka.context.append",
+    "chat.open_session"
+  ],
+  "i18n": {
+    "default_locale": "zh-CN",
+    "supported_locales": ["zh-CN"]
+  },
+  "id": "oh-mai-agent"
+}
