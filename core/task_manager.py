@@ -467,7 +467,9 @@ class TaskManager:
         """向用户提问的跨层回调。
 
         由 AgentLoop 的 on_ask 参数和 ask_tool 的 ask_callback 共用。
-        发送消息到目标聊天流（带任务标识前缀），记录日志。
+        经统一发送入口（``send_final_reply``）润色后发送到目标聊天流 ——
+        提问也走"更像人"的润色链路，与任务回复共享同一套可靠性保障
+        （指数退避重试 + 静默掉包检测 + 上下文记录）。
         真实的挂起 / 等待 / 恢复状态转换由 AgentLoop._handle_ask_user 内部处理。
 
         Args:
@@ -484,7 +486,14 @@ class TaskManager:
         full_msg = f"{prefix}{question}"
 
         try:
-            await self._ctx.send.text(full_msg, stream_id)
+            from ..executor.instant import send_final_reply
+
+            await send_final_reply(
+                full_msg, stream_id,
+                self._ctx, self._config, self._prompt_manager,
+                self._prompt_service,
+                max_retries=3,
+            )
             logger.info("已向聊天流 %s 发送 ask_user 提问：%s", stream_id, question[:80])
         except Exception:
             logger.exception("向聊天流 %s 发送 ask_user 提问失败", stream_id)

@@ -75,10 +75,34 @@ def resolve_caller(plugin: "MaibotAgentPlugin", **kwargs: Any) -> tuple[Role, st
 
 # ── 命令内部实现 ──────────────────────────────────────────────────────
 
-async def cmd_reply(plugin: "MaibotAgentPlugin", stream_id: str, response: str) -> None:
-    """发送命令响应到目标聊天流（命令响应必须由插件自行发送）。"""
+def _plugin_config(plugin: "MaibotAgentPlugin"):
+    """安全读取插件强类型配置；未注入（如测试环境）时返回 None。"""
     try:
-        await plugin.ctx.send.text(response, stream_id)
+        return plugin.config
+    except Exception:
+        return None
+
+
+async def cmd_reply(plugin: "MaibotAgentPlugin", stream_id: str, response: str) -> None:
+    """发送命令响应到目标聊天流（统一发送入口，不润色）。
+
+    命令是排障/操作场景，需要确定性输出（任务 ID、状态等关键信息不能被
+    改写），故经 ``send_final_reply`` 以 ``polish=False`` 直发原文 —— 但仍
+    获得与任务回复相同的可靠性保障：指数退避重试、静默掉包检测与
+    上下文记录（MaiBot LLM 可见命令响应，对话更连贯）。
+    """
+    from .executor.instant import send_final_reply
+
+    try:
+        await send_final_reply(
+            response, stream_id,
+            plugin.ctx,
+            _plugin_config(plugin),
+            getattr(plugin, "_pm", None),
+            getattr(plugin, "_pm_service", None),
+            max_retries=3,
+            polish=False,
+        )
     except Exception:
         plugin.ctx.logger.warning(
             "命令响应发送失败 stream=%s: %s", stream_id, response[:50], exc_info=True

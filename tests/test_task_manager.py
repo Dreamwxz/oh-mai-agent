@@ -1291,3 +1291,38 @@ class TestHandleUserReplyPrivateStream:
         updated = await real_store.get("t1")
         assert updated is not None
         assert updated.metadata.get("_user_reply") == "继续"
+
+
+class TestAskCallback:
+    @pytest.mark.asyncio
+    async def test_ask_callback_forwards_to_unified_send(
+        self, manager: TaskManager, mock_ctx: MockCtx,
+    ) -> None:
+        """ask_user 提问经统一发送入口（send_final_reply，默认润色）发送。"""
+        from unittest.mock import patch
+
+        with patch(
+            "oh_mai_agent.executor.instant.send_final_reply",
+            new_callable=AsyncMock,
+        ) as send:
+            await manager._ask_callback("qq:g:1", "今晚吃什么？")
+
+        send.assert_awaited_once()
+        args, kwargs = send.call_args.args, send.call_args.kwargs
+        assert args[0] == "今晚吃什么？"
+        assert args[1] == "qq:g:1"
+        # polish 缺省 True：提问走"更像人"的润色链路
+        assert kwargs.get("polish", True) is True
+
+    @pytest.mark.asyncio
+    async def test_ask_callback_send_failure_logged_not_raised(
+        self, manager: TaskManager, mock_ctx: MockCtx,
+    ) -> None:
+        """提问发送失败时只记日志，不向上抛（提问不阻塞 Agent 循环）。"""
+        from unittest.mock import patch
+
+        async def _boom(*args: Any, **kwargs: Any) -> None:
+            raise RuntimeError("send failed")
+
+        with patch("oh_mai_agent.executor.instant.send_final_reply", _boom):
+            await manager._ask_callback("qq:g:1", "问题")  # 不应抛异常
