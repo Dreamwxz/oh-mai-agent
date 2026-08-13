@@ -1,8 +1,9 @@
-"""Instant 执行器 —— 润色意图后直接发送。
+"""Instant 执行器 —— 润色、分割并发送意图。
 
 从 ``TaskManager.execute_instant`` 迁移而来。Instant 任务是最简单的单步即时动作：
 不需要 LLM 推理、不需要工具调用、不涉及状态机 —— 意图本身就是要发送的消息，
-只需经过 PolishService 润色后直发到目标聊天流，任务即算完成。
+只需经过 PolishService 润色后按行/句切分（长回复拆成多条，见 ``splitter.py``）
+直发到目标聊天流，任务即算完成。
 
 设计要点：Instant 是三级执行体系中最轻量的执行器，零等待、零并发控制，
 创建后立刻完成。
@@ -21,6 +22,7 @@ from ..config import PolishConfig
 from ..domain.task_record import TaskRecord, TaskStatus, TaskStatusError
 from ..prompt.manager import PromptManager
 from .base import ExecutionContext, ExecutionResult, complete_and_notify
+from .splitter import split_message
 
 logger = logging.getLogger(__name__)
 
@@ -321,101 +323,137 @@ async def send_final_reply(
     motivation: str | None = None,
     kind: str = "reply",
     requester: str = "",
+    polish: bool = True,
+    split: bool | None = None,
 ) -> None:
-    """润色并发送任务的最终回复到目标聊天流（含指数退避重试）。
+    """润色、分割并发送任务的最终回复到目标聊天流（含指数退避重试）。
 
     润色步骤（PolishService）只执行一次，有自身回退逻辑。
-    发送步骤（ctx.send.text）在失败时进行指数退避重试：
-      1s → 2s（max_retries 次），全部失败则抛出最后异常。
+    分割步骤在润色之后进行：长回复经 ``split_message`` 按行/句切成多条，
+    最多 ``config.splitter.max_messages`` 条（``config.splitter.enable=False``
+    时整条发送）。
+    发送步骤（ctx.send.text）逐段进行，每段在失败时指数退避重试：
+      1s → 2s（max_retries 次），任一段全部失败即停止后续分段并抛出最后异常。
     检测 SDK 静默掉包：ctx.send.text 返回 False/None 视为失败并重试。
 
     Args:
         text: 待润色和发送的原始文本。
         stream_id: 目标聊天流 ID。
         ctx: MaiBot PluginContext。
-        config: MaibotAgentConfig（含 ``.polish`` 子配置）。
+        config: MaibotAgentConfig（含 ``.polish`` 与 ``.splitter`` 子配置）。
         prompt_manager: Prompt 管理器（可选）。
         max_retries: ctx.send.text 最大重试次数（默认 3）。
         is_group: 显式指定是否为群聊；None 时从 stream_id 推导。
-        motivation: 任务动机文本。非空且 prompt_service 可用时，成功发送后
-                    将 XML 上下文注释写入目标聊天流
+        motivation: 任务动机文本。非空且 prompt_service 可用时，全部分段
+                    发送成功后，将 XML 上下文注释写入目标聊天流
                     （通过 ctx.maisaka.context.append）。
         kind: 润色模式 reply/relay，透传给 PolishService.polish（默认 reply）。
         requester: 转达委托人，透传给 PolishService.polish（缺省空串）。
+        polish: 是否执行 LLM 润色（默认 True）。False 时跳过 PolishService
+                直发原文——发送代码、命令或结构化文本等不希望被改写的内容时使用。
+        split: 是否分割长文本（默认 None）。None 跟随 ``config.splitter.enable``；
+               True/False 强制开启/关闭分割（发送方按场景覆盖全局配置）。
     """
     # 润色步骤 — 仅执行一次，PolishService 自身有回退逻辑
-    svc = PolishService(
-        ctx=ctx,
-        config=config.polish,
-        prompt_manager=prompt_manager,
-        prompt_service=prompt_service,
-    )
-    polished = await svc.polish(
-        result=text,
-        stream_id=stream_id,
-        is_group=is_group if is_group is not None else (":group:" in stream_id),
-        kind=kind,
-        requester=requester,
-    )
+    if polish:
+        svc = PolishService(
+            ctx=ctx,
+            config=config.polish,
+            prompt_manager=prompt_manager,
+            prompt_service=prompt_service,
+        )
+        polished = await svc.polish(
+            result=text,
+            stream_id=stream_id,
+            is_group=is_group if is_group is not None else (":group:" in stream_id),
+            kind=kind,
+            requester=requester,
+        )
+    else:
+        polished = text
 
-    # 发送步骤 — 指数退避重试
+    # 分割步骤 — 长回复按行/句切分（复刻 MaiBot response_splitter 思路）
+    splitter = getattr(config, "splitter", None)
+    use_split = split if split is not None else (splitter is not None and splitter.enable)
+    if use_split:
+        segments = split_message(
+            polished,
+            max_length=splitter.max_length,
+            max_messages=splitter.max_messages,
+        ) or [polished]
+    else:
+        segments = [polished]
+    if len(segments) > 1:
+        logger.debug(
+            "回复文本分割为 %d 段（共 %d 字符），流=%s",
+            len(segments), len(polished), stream_id,
+        )
+
+    # 发送步骤 — 逐段指数退避重试，任一段耗尽重试即停止后续分段
     last_exc: Exception | None = None
-    for attempt in range(max_retries):
-        try:
-            logger.debug(
-                "发送回复第 %d/%d 次尝试：流=%s（本次退避间隔 %ds）",
-                attempt + 1, max_retries, stream_id, 2 ** attempt,
-            )
-            result = await ctx.send.text(polished, stream_id)
-            if result in (False, None):
-                raise RuntimeError("send.text returned False/None")
-            # 成功发送后，向上下文注入记录
-            # 1. 纯文本记录（润色后的实际发送文本，无 XML）
+    for segment in segments:
+        for attempt in range(max_retries):
             try:
+                logger.debug(
+                    "发送回复第 %d/%d 次尝试：流=%s（本次退避间隔 %ds）",
+                    attempt + 1, max_retries, stream_id, 2 ** attempt,
+                )
+                result = await ctx.send.text(segment, stream_id)
+                if result in (False, None):
+                    raise RuntimeError("send.text returned False/None")
+                break
+            except Exception as exc:
+                last_exc = exc
+                if attempt < max_retries - 1:
+                    backoff = 2 ** attempt
+                    logger.warning(
+                        "发送回复第 %d/%d 次尝试失败（流=%s），%ds 后重试：%s",
+                        attempt + 1, max_retries, stream_id, backoff, exc,
+                    )
+                    await asyncio.sleep(backoff)
+                else:
+                    logger.error(
+                        "发送回复第 %d/%d 次尝试失败（流=%s），重试 %d 次全部失败，放弃发送",
+                        attempt + 1, max_retries, stream_id, max_retries,
+                        exc_info=True,
+                    )
+        else:
+            # 本段重试耗尽 —— 停止发送后续分段
+            break
+        # 成功发送后，向上下文注入记录（每段一条纯文本记录，无 XML）
+        try:
+            await ctx.maisaka.context.append(
+                stream_id=stream_id,
+                segments=[{"type": "text", "content": segment}],
+                visible_text=segment,
+                source_kind="plugin:oh-mai-agent:task-reply",
+            )
+        except Exception:
+            logger.warning("纯文本上下文记录写入失败，流=%s", stream_id, exc_info=True)
+    else:
+        # 全部分段发送成功
+        # XML 动机注释（仅当 motivation 非空且 prompt_service 可用）
+        if motivation and prompt_service is not None:
+            try:
+                note_id = f"oh-mai-agent:task-note:{int(time.time() * 1000)}"
+                note_text = prompt_service.build(
+                    "context_note",
+                    kind="task-reply",
+                    content=motivation,
+                    id=note_id,
+                )
                 await ctx.maisaka.context.append(
                     stream_id=stream_id,
-                    segments=[{"type": "text", "content": polished}],
-                    visible_text=polished,
+                    segments=[{"type": "text", "content": note_text}],
+                    visible_text=note_text,
+                    message_id=note_id,
                     source_kind="plugin:oh-mai-agent:task-reply",
                 )
             except Exception:
-                logger.warning("纯文本上下文记录写入失败，流=%s", stream_id, exc_info=True)
-            # 2. XML 动机注释（仅当 motivation 非空且 prompt_service 可用）
-            if motivation and prompt_service is not None:
-                try:
-                    note_id = f"oh-mai-agent:task-note:{int(time.time() * 1000)}"
-                    note_text = prompt_service.build(
-                        "context_note",
-                        kind="task-reply",
-                        content=motivation,
-                        id=note_id,
-                    )
-                    await ctx.maisaka.context.append(
-                        stream_id=stream_id,
-                        segments=[{"type": "text", "content": note_text}],
-                        visible_text=note_text,
-                        message_id=note_id,
-                        source_kind="plugin:oh-mai-agent:task-reply",
-                    )
-                except Exception:
-                    logger.warning("XML 动机注释写入失败，流=%s", stream_id, exc_info=True)
-            return
-        except Exception as exc:
-            last_exc = exc
-            if attempt < max_retries - 1:
-                backoff = 2 ** attempt
-                logger.warning(
-                    "发送回复第 %d/%d 次尝试失败（流=%s），%ds 后重试：%s",
-                    attempt + 1, max_retries, stream_id, backoff, exc,
-                )
-                await asyncio.sleep(backoff)
-            else:
-                logger.error(
-                    "发送回复重试 %d 次全部失败（流=%s），放弃发送",
-                    max_retries, stream_id, exc_info=True,
-                )
+                logger.warning("XML 动机注释写入失败，流=%s", stream_id, exc_info=True)
+        return
 
-    # 所有重试已耗尽
+    # 某段重试耗尽 —— 抛出最后异常交由上层标记 FAILED
     if last_exc is not None:
         raise last_exc
 

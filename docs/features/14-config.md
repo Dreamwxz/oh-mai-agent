@@ -14,11 +14,11 @@
 
 ### Pydantic 数据模型
 
-配置模型全部定义在 `config.py`，共 11 个 Pydantic 类，分三层：
+配置模型全部定义在 `config.py`，共 12 个 Pydantic 类，分三层：
 
-- **9 个配置节类**，对应 `config.toml` 的 9 个节：`PluginSection`（config.py:23）、`PermissionConfig`（:47）、`TaskConfig`（:100）、`PlannerBoardConfig`（:144）、`PolishConfig`（:188）、`MCPConfig`（:273）、`ApiExposeConfig`（:317）、`SearchConfig`（:334）、`SubAgentConfig`（:351）。
-- **1 个嵌套模型** `MCPServerConfig`（config.py:205），描述单个 MCP 服务器，作为 `MCPConfig.servers` 列表的元素。
-- **1 个根模型** `MaibotAgentConfig`（config.py:397），聚合上述 9 节，是插件对外声明的完整配置。
+- **10 个配置节类**，对应 `config.toml` 的 10 个节：`PluginSection`（config.py:23）、`PermissionConfig`（:47）、`TaskConfig`（:100）、`PlannerBoardConfig`（:144）、`PolishConfig`（:188）、`SplitterConfig`（:205）、`MCPConfig`（:310）、`ApiExposeConfig`（:354）、`SearchConfig`（:371）、`SubAgentConfig`（:388）。
+- **1 个嵌套模型** `MCPServerConfig`（config.py:242），描述单个 MCP 服务器，作为 `MCPConfig.servers` 列表的元素。
+- **1 个根模型** `MaibotAgentConfig`（config.py:434），聚合上述 10 节，是插件对外声明的完整配置。
 
 每个类继承 `maibot_sdk.PluginConfigBase`。字段用 `Field(default=..., description=...)` 声明默认值和中文描述，`json_schema_extra` 提供 WebUI 表单的中文 `label` / `hint`（无 label 时 WebUI 回退显示英文字段名），`__ui_label__` 提供 WebUI 表单的分组名。`Literal[...]` 类型（如 `transport`、`max_level`）会让 WebUI 渲染成下拉框。
 
@@ -46,9 +46,9 @@
 
 ## 使用与配置
 
-### 9 节配置项详解
+### 10 节配置项详解
 
-以下按 9 个配置节列出全部字段。配置键与 `config.py` 字段一一对应。
+以下按 10 个配置节列出全部字段。配置键与 `config.py` 字段一一对应。
 
 #### `[plugin]` — 插件
 
@@ -98,6 +98,16 @@
 | `use_jargon` | `bool` | `true` | 润色时机械匹配黑话（复刻 MaiBot `jargon_context_matcher`） |
 
 其他润色参数（消息条数、黑话条数上限等）直接跟随 MaiBot 全局配置，不提供插件级覆盖。
+
+#### `[splitter]` — 回复分割
+
+| 字段 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `enable` | `bool` | `true` | 是否把长回复拆成多条消息发送（复刻 MaiBot `response_splitter` 思路的确定性版本） |
+| `max_length` | `int` | `1000` | 单条消息目标最大长度（字符），无标点的超长句会被硬切（`ge=50`） |
+| `max_messages` | `int` | `5` | 一次回复最多拆成几条消息，超过时尾部合并进最后一条（`ge=1`） |
+
+分割在 `send_final_reply` 润色之后进行，按行/句末标点确定性切分，保留原文不丢内容；四条回复路径（instant 任务、agent 完成回复、send_message 工具、失败通知）统一生效。`send_message` 工具的 `split` 参数可按单次调用覆盖（`false` 时整条发送）。详见 [回复润色](./06-polish.md)。
 
 #### `[mcp]` — MCP
 
@@ -151,4 +161,4 @@ MCP 工具进入 Agent 工具集的 Discoverable 层，按权限过滤。不支�
 ### 已知限制
 
 - **`default_timeout_min` 已配置但未执行**（config.py:124-131）。`TaskConfig.default_timeout_min` 声明了 `ask_user` 无回复挂起等待时间的意图，但调度器未读取该值：`waiting_input` 状态的任务不因超时而自动取消或推进，而是永久挂起直到用户回复或手动取消。
-- **`api_expose.max_level` 声明未执行**（config.py:323-330）。`ApiExposeConfig.max_level` 声明了暴露等级约束，但 `api_expose.py` 的 `build_api_handlers()` 未读取该值做调用方过滤，6 个端点全部 `public=True`。用户将 `max_level` 设为 `"admin"` 不会改变实际行为。
+- **`api_expose.max_level` 声明未执行**（config.py:354-361）。`ApiExposeConfig.max_level` 声明了暴露等级约束，但 `api_expose.py` 的 `build_api_handlers()` 未读取该值做调用方过滤，6 个端点全部 `public=True`。用户将 `max_level` 设为 `"admin"` 不会改变实际行为。

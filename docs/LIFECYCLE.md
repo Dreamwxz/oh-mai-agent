@@ -280,14 +280,15 @@ Agent 循环完成 / Instant 任务
                 │
                 ▼
 ┌────────────────────────────────────┐
-│ InstantExecutor.execute()          │  instant.py:490
+│ InstantExecutor.execute()          │  instant.py:528
 │  ┌──────────────────────────────┐  │
-│  │ send_final_reply()           │  │  instant.py:311-420
+│  │ send_final_reply()           │  │  instant.py:313-458
 │  │  ├─ PolishService.polish()   │  │  仅执行一次，失败回退原文
-│  │  ├─ ctx.send.text(润色文本)   │  │
+│  │  ├─ split_message(分段)      │  │  按行/句切分，≤max_messages 条
+│  │  ├─ ctx.send.text(逐段发送)  │  │
 │  │  │   └─ 失败 → 指数退避重试   │  │  1s → 2s（2^attempt）
 │  │  │      检测 False/None 掉包  │  │
-│  │  └─ 跨流回复补写 motivation   │  │  instant.py:558-589
+│  │  └─ 跨流回复补写 motivation   │  │  instant.py:596-627
 │  └──────────────┬───────────────┘  │
 │                 ▼                  │
 │  complete_and_notify()             │  base.py:114-118
@@ -296,7 +297,7 @@ Agent 循环完成 / Instant 任务
          │ 异常
          ▼
 ┌────────────────────────────────────┐
-│ fail_task()                        │  instant.py:426-477
+│ fail_task()                        │  instant.py:464-515
 │  可选: send_final_reply(失败消息)   │
 │  task → FAILED（终态守卫 + force）  │
 └────────────────────────────────────┘
@@ -304,16 +305,17 @@ Agent 循环完成 / Instant 任务
 
 ### 润色与发送
 
-`send_final_reply()`（`executor/instant.py:311-420`）是回复路径的核心，如实记载三个行为：
+`send_final_reply()`（`executor/instant.py:313-458`）是回复路径的核心，如实记载四个行为：
 
-1. **润色仅执行一次**：`PolishService.polish()`（`executor/instant.py:81-305`）拉取聊天记录和黑话表经 LLM 润色，失败时自动回退到原始文本
-2. **指数退避重试**：`ctx.send.text()` 失败时重试，间隔 1s → 2s（`2^attempt`）
-3. **静默掉包检测**：`send.text` 返回 `False/None` 时视为失败并重试，防止消息被静默丢弃
+1. **润色仅执行一次**：`PolishService.polish()`（`executor/instant.py:83-307`）拉取聊天记录和黑话表经 LLM 润色，失败时自动回退到原始文本（`polish=False` 可跳过润色直发原文）
+2. **长回复分割**：`split_message()`（`executor/splitter.py`）按行/句末标点把回复切成多条（≤ `max_messages` 条、每段 ≤ `max_length`），保留原文不丢内容；`split=False` 或 `[splitter] enable=false` 时整条发送
+3. **逐段指数退避重试**：每段 `ctx.send.text()` 失败时重试，间隔 1s → 2s（`2^attempt`），任一段耗尽即停止后续分段并抛异常
+4. **静默掉包检测**：`send.text` 返回 `False/None` 时视为失败并重试，防止消息被静默丢弃
 
 ### 完成与失败
 
 - 成功路径：`complete_and_notify()`（`executor/base.py:114-118`）`transition(COMPLETED)`（拒绝时 force 兜底）→ save → `scheduler.on_task_completed()` 释放并发额度。仅 instant 路径使用，agent 在 AgentLoop.run() 内部自管终态
-- 失败路径：`fail_task()`（`executor/instant.py:426-477`）可选先发失败消息，再 `transition(FAILED)`（失败回退 force），落盘后通知调度器释放额度
+- 失败路径：`fail_task()`（`executor/instant.py:464-515`）可选先发失败消息，再 `transition(FAILED)`（失败回退 force），落盘后通知调度器释放额度
 
 ### 用户回复唤醒
 

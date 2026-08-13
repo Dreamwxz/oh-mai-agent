@@ -202,6 +202,43 @@ class PolishConfig(PluginConfigBase):
     )
 
 
+class SplitterConfig(PluginConfigBase):
+    """回复分割配置。"""
+
+    __ui_label__ = "回复分割"
+    __ui_order__ = 5
+
+    enable: bool = Field(
+        default=True,
+        description="是否把长回复拆成多条消息发送（复刻 MaiBot response_splitter 思路的确定性版本）",
+        json_schema_extra={
+            "label": "启用回复分割",
+            "hint": "是否把长回复拆成多条消息发送（复刻 MaiBot response_splitter 思路的确定性版本）",
+            "order": 0,
+        },
+    )
+    max_length: int = Field(
+        default=1000,
+        ge=50,
+        description="单条消息目标最大长度（字符）；无标点的超长句会被硬切",
+        json_schema_extra={
+            "label": "单条最大长度",
+            "hint": "单条消息目标最大长度（字符）；无标点的超长句会被硬切",
+            "order": 1,
+        },
+    )
+    max_messages: int = Field(
+        default=5,
+        ge=1,
+        description="一次回复最多拆成几条消息；超过时尾部合并进最后一条",
+        json_schema_extra={
+            "label": "最多分割条数",
+            "hint": "一次回复最多拆成几条消息；超过时尾部合并进最后一条",
+            "order": 2,
+        },
+    )
+
+
 class MCPServerConfig(PluginConfigBase):
     """单个 MCP 服务器配置。"""
 
@@ -274,7 +311,7 @@ class MCPConfig(PluginConfigBase):
     """MCP 协议配置。"""
 
     __ui_label__ = "MCP"
-    __ui_order__ = 5
+    __ui_order__ = 6
 
     enabled: bool = Field(
         default=True,
@@ -318,7 +355,7 @@ class ApiExposeConfig(PluginConfigBase):
     """API 暴露等级配置。"""
 
     __ui_label__ = "API暴露"
-    __ui_order__ = 6
+    __ui_order__ = 7
 
     max_level: Literal["guest", "user", "admin"] = Field(
         default="user",
@@ -335,7 +372,7 @@ class SearchConfig(PluginConfigBase):
     """搜索配置。"""
 
     __ui_label__ = "搜索"
-    __ui_order__ = 7
+    __ui_order__ = 8
 
     max_results: int = Field(
         default=20,
@@ -352,7 +389,7 @@ class SubAgentConfig(PluginConfigBase):
     """子 Agent 配置。"""
 
     __ui_label__ = "子Agent"
-    __ui_order__ = 8
+    __ui_order__ = 9
 
     enabled: bool = Field(
         default=True,
@@ -418,6 +455,10 @@ class MaibotAgentConfig(PluginConfigBase):
     polish: PolishConfig = Field(
         default_factory=PolishConfig,
         description="回复润色配置",
+    )
+    splitter: SplitterConfig = Field(
+        default_factory=SplitterConfig,
+        description="回复分割配置",
     )
     mcp: MCPConfig = Field(
         default_factory=MCPConfig,
