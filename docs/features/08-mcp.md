@@ -86,6 +86,8 @@ MCP 是**纯静态配置**：生效服务器列表由内置预设与自定义条
 [mcp]
 enabled = true
 fetch_enabled = true
+# 内置 fetch 出站请求的 User-Agent；默认浏览器 UA，留空退回 mcp-server-fetch 自带 UA
+fetch_user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 exa_enabled = true
 
 [[mcp.servers]]
@@ -103,7 +105,8 @@ headers = { Authorization = "Bearer sk-xxx" }
 
 字段说明：`enabled = false` 时 `MCPManager.start()` 直接跳过，所有 MCP 工具不可见；`name`
 为空或连接失败的服务器被跳过并记日志（`provider.py:63-80`）。`fetch_enabled` / `exa_enabled`
-控制两个内置预设服务器是否启用，`servers` 默认空列表，仅在自定义追加时填写。完整配置项与
+控制两个内置预设服务器是否启用，`fetch_user_agent` 控制内置 fetch 出站请求的 User-Agent
+（详见下文「内置预设」），`servers` 默认空列表，仅在自定义追加时填写。完整配置项与
 WebUI 表单见 [配置体系](./14-config.md)。注意 stdio 需要本机能执行对应命令（如 npx），
 http/sse 需要网络可达目标 URL。
 
@@ -113,8 +116,16 @@ http/sse 需要网络可达目标 URL。
 
 - **exa**：远程 web 搜索，http 传输，`https://mcp.exa.ai/mcp?tools=web_search_exa`。匿名可用
   （有限流），可通过 `x-api-key` 或 `Authorization: Bearer` 请求头提升额度。
-- **fetch**：本地网页抓取，stdio 传输，经 `python -m mcp_server_fetch` 启动，Runner 自动安装
-  依赖。默认遵守 robots.txt，env 自带 `PYTHONIOENCODING=utf-8`。
+- **fetch**：本地网页抓取，stdio 传输，经 `python -m mcp_server_fetch --user-agent <UA>`
+  启动，Runner 自动安装依赖。默认遵守 robots.txt，env 自带 `PYTHONIOENCODING=utf-8`。
+  **出站 UA 伪装**：`mcp-server-fetch` 自带的默认 UA 是
+  `ModelContextProtocol/1.0 (Autonomous; +https://github.com/modelcontextprotocol/servers)`，
+  是显式 bot 指纹，会被 B 站等反爬站点直接命中验证码/挑战页（实测返回 687B 挑战页而非
+  65KB 完整页面）。因此预设默认经 `fetch_user_agent` 配置项携带浏览器 UA
+  （`[mcp].fetch_user_agent`，默认 Chrome/126 Windows，见上方示例），按站点实际拦截情况
+  可自行更换；留空则不传 `--user-agent`，退回服务器默认 UA。该 UA 同时用于 robots.txt
+  合规检查（`mcp-server-fetch` 的 `check_may_autonomously_fetch_url`），B 站等站点
+  robots.txt 按 `User-agent: *` 通配判定，不因换 UA 新增拦截。
 
 生效服务器列表由 `resolve_effective_servers`（`tools/mcp/presets.py`）按开关与去重规则组装：
 exa 启用且用户列表无同名或同 URL 条目时加入，fetch 启用且用户列表无同名条目时加入，用户

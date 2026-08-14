@@ -16,9 +16,9 @@
 
 配置模型全部定义在 `config.py`，共 12 个 Pydantic 类，分三层：
 
-- **10 个配置节类**，对应 `config.toml` 的 10 个节：`PluginSection`（config.py:23）、`PermissionConfig`（:47）、`TaskConfig`（:100）、`PlannerBoardConfig`（:144）、`PolishConfig`（:188）、`SplitterConfig`（:205）、`MCPConfig`（:310）、`ApiExposeConfig`（:354）、`SearchConfig`（:371）、`SubAgentConfig`（:388）。
-- **1 个嵌套模型** `MCPServerConfig`（config.py:242），描述单个 MCP 服务器，作为 `MCPConfig.servers` 列表的元素。
-- **1 个根模型** `MaibotAgentConfig`（config.py:434），聚合上述 10 节，是插件对外声明的完整配置。
+- **10 个配置节类**，对应 `config.toml` 的 10 个节：`PluginSection`（config.py:32）、`PermissionConfig`（:56）、`TaskConfig`（:109）、`PlannerBoardConfig`（:153）、`PolishConfig`（:197）、`SplitterConfig`（:214）、`MCPConfig`（:319）、`ApiExposeConfig`（:375）、`SearchConfig`（:392）、`SubAgentConfig`（:409）。
+- **1 个嵌套模型** `MCPServerConfig`（config.py:251），描述单个 MCP 服务器，作为 `MCPConfig.servers` 列表的元素。
+- **1 个根模型** `MaibotAgentConfig`（config.py:492），聚合上述 10 节，是插件对外声明的完整配置。
 
 每个类继承 `maibot_sdk.PluginConfigBase`。字段用 `Field(default=..., description=...)` 声明默认值和中文描述，`json_schema_extra` 提供 WebUI 表单的中文 `label` / `hint`（无 label 时 WebUI 回退显示英文字段名），`__ui_label__` 提供 WebUI 表单的分组名。`Literal[...]` 类型（如 `transport`、`max_level`）会让 WebUI 渲染成下拉框。
 
@@ -115,6 +115,7 @@
 |---|---|---|---|
 | `enabled` | `bool` | `true` | 是否启用 MCP 工具 |
 | `fetch_enabled` | `bool` | `true` | 是否启用内置 fetch MCP 服务器 |
+| `fetch_user_agent` | `str` | 浏览器 UA（Chrome/126 Windows） | 内置 fetch 出站请求的 User-Agent；默认浏览器 UA 规避反爬验证码，留空退回 mcp-server-fetch 自带 UA |
 | `exa_enabled` | `bool` | `true` | 是否启用内置 exa.ai MCP 服务器 |
 | `servers` | `list[MCPServerConfig]` | `[]`（自定义追加；内置 exa/fetch 预设见 08-mcp.md） | MCP 服务器列表 |
 

@@ -19,6 +19,15 @@ from maibot_sdk import Field, PluginConfigBase
 
 logger = logging.getLogger(__name__)
 
+#: 内置 fetch 出站请求的默认 User-Agent（浏览器 UA）。
+#: mcp-server-fetch 自带的 ``ModelContextProtocol/1.0 (Autonomous; ...)`` 是显式 bot 指纹，
+#: 会被 B 站等反爬站点直接命中验证码/挑战页；浏览器 UA 实测可正常取回页面。
+#: 版本号会随时间过时，若某站点开始拦截可在配置里自行更新。
+_DEFAULT_FETCH_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+)
+
 
 class PluginSection(PluginConfigBase):
     """插件基本信息配置。"""
@@ -331,13 +340,25 @@ class MCPConfig(PluginConfigBase):
             "order": 1,
         },
     )
+    fetch_user_agent: str = Field(
+        default=_DEFAULT_FETCH_USER_AGENT,
+        description=(
+            "内置 fetch 出站请求的 User-Agent；默认使用浏览器 UA 以规避反爬（如 B 站验证码），"
+            "留空则退回 mcp-server-fetch 自带的 ModelContextProtocol UA"
+        ),
+        json_schema_extra={
+            "label": "fetch 出站 User-Agent",
+            "hint": "内置 fetch 出站请求的 User-Agent；默认浏览器 UA 规避反爬验证码，留空退回 MCP 默认 UA",
+            "order": 2,
+        },
+    )
     exa_enabled: bool = Field(
         default=True,
         description="是否启用内置 exa.ai MCP 服务器（远程 web 搜索）",
         json_schema_extra={
             "label": "内置 exa.ai",
             "hint": "是否启用内置 exa.ai MCP 服务器（远程 web 搜索）",
-            "order": 2,
+            "order": 3,
         },
     )
     servers: list[MCPServerConfig] = Field(
@@ -346,7 +367,7 @@ class MCPConfig(PluginConfigBase):
         json_schema_extra={
             "label": "自定义服务器",
             "hint": "自定义 MCP 服务器列表（在内置 fetch / exa 之外追加）",
-            "order": 3,
+            "order": 4,
         },
     )
 

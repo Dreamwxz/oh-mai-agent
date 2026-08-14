@@ -6,7 +6,7 @@ resolve_effective_servers 是纯函数：仅按配置开关与去重规则组装
 
 import sys
 
-from oh_mai_agent.config import MCPConfig, MCPServerConfig
+from oh_mai_agent.config import MCPConfig, MCPServerConfig, _DEFAULT_FETCH_USER_AGENT
 from oh_mai_agent.tools.mcp.presets import EXA_URL, resolve_effective_servers
 
 
@@ -27,9 +27,34 @@ def test_default_resolves_exa_then_fetch_in_order():
 
     assert fetch.transport == "stdio"
     assert fetch.command == sys.executable
-    assert fetch.args == ["-m", "mcp_server_fetch"]
+    # 默认携带浏览器 UA（--user-agent），规避 mcp-server-fetch 自带 bot UA 触发反爬
+    assert fetch.args == [
+        "-m",
+        "mcp_server_fetch",
+        "--user-agent",
+        _DEFAULT_FETCH_USER_AGENT,
+    ]
     assert fetch.env == {"PYTHONIOENCODING": "utf-8"}
     assert fetch.name == "fetch"
+
+
+def test_fetch_preset_empty_user_agent_omits_flag():
+    """fetch_user_agent 留空 → 不传 --user-agent，退回 mcp-server-fetch 默认 UA。"""
+    servers = resolve_effective_servers(MCPConfig(fetch_user_agent=""))
+
+    fetch = servers[1]
+    assert fetch.name == "fetch"
+    assert fetch.args == ["-m", "mcp_server_fetch"]
+
+
+def test_fetch_preset_custom_user_agent_passed_through():
+    """fetch_user_agent 自定义 → 原样传入 --user-agent。"""
+    custom_ua = "Mozilla/5.0 (X11; Linux x86_64) Chrome/125.0.0.0"
+    servers = resolve_effective_servers(MCPConfig(fetch_user_agent=custom_ua))
+
+    fetch = servers[1]
+    assert fetch.name == "fetch"
+    assert fetch.args == ["-m", "mcp_server_fetch", "--user-agent", custom_ua]
 
 
 def test_exa_disabled_resolves_only_fetch():
