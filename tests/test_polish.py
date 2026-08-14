@@ -52,6 +52,11 @@ class TestJargonInScope:
     def test_invalid_json(self) -> None:
         assert _jargon_in_scope("not json", "qq:g:1") is False
 
+    def test_valid_json_non_dict(self) -> None:
+        """JSON 合法但不是 dict（如数组/数字）→ 判定为不在作用域。"""
+        assert _jargon_in_scope("[1,2,3]", "qq:g:1") is False
+        assert _jargon_in_scope("42", "qq:g:1") is False
+
     def test_none_value(self) -> None:
         assert _jargon_in_scope(None, "qq:g:1") is False
 
@@ -283,3 +288,101 @@ class TestPolishService:
             is_group=True,
         )
         assert result == "ok"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# _match_jargons — 黑话机械匹配内部逻辑（真实 MockCtx DB 记录）
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestMatchJargons:
+    @pytest.fixture
+    def mock_ctx(self) -> MockCtx:
+        return MockCtx()
+
+    def _svc(self, mock_ctx: MockCtx, prompt_service: Any) -> PolishService:
+        return PolishService(
+            ctx=mock_ctx, config=PolishConfig(use_jargon=True),
+            use_jargon=True, prompt_service=prompt_service,
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_candidates_returns_empty(self, mock_ctx: MockCtx, prompt_service: Any) -> None:
+        svc = self._svc(mock_ctx, prompt_service)
+        assert await svc._match_jargons("qq:g:1", ["随便说点什么"]) == []
+
+    @pytest.mark.asyncio
+    async def test_global_jargon_matched_in_text(self, mock_ctx: MockCtx, prompt_service: Any) -> None:
+        mock_ctx.add_db_record("Jargon", {
+            "content": "yyds", "meaning": "永远滴神", "is_jargon": True, "is_global": True, "count": 5,
+        })
+        svc = self._svc(mock_ctx, prompt_service)
+        result = await svc._match_jargons("qq:g:1", ["今天真的 yyds"])
+        assert result == [{"content": "yyds", "meaning": "永远滴神"}]
+
+    @pytest.mark.asyncio
+    async def test_scoped_jargon_requires_stream_match(self, mock_ctx: MockCtx, prompt_service: Any) -> None:
+        mock_ctx.add_db_record("Jargon", {
+            "content": "私聊黑话", "meaning": "只在特定流", "is_jargon": True, "is_global": False,
+            "session_id_dict": '{"qq:g:9": 3}', "count": 5,
+        })
+        svc = self._svc(mock_ctx, prompt_service)
+        # 不在作用域 → 不匹配
+        assert await svc._match_jargons("qq:g:1", ["私聊黑话"]) == []
+        # 在作用域 → 匹配
+        result = await svc._match_jargons("qq:g:9", ["私聊黑话"])
+        assert result == [{"content": "私聊黑话", "meaning": "只在特定流"}]
+
+    @pytest.mark.asyncio
+    async def test_empty_content_or_meaning_skipped(self, mock_ctx: MockCtx, prompt_service: Any) -> None:
+        mock_ctx.add_db_record("Jargon", {
+            "content": "", "meaning": "空内容", "is_jargon": True, "is_global": True, "count": 5,
+        })
+        mock_ctx.add_db_record("Jargon", {
+            "content": "有内容无释义", "meaning": "", "is_jargon": True, "is_global": True, "count": 5,
+        })
+        svc = self._svc(mock_ctx, prompt_service)
+        assert await svc._match_jargons("qq:g:1", ["有内容无释义"]) == []
+
+    @pytest.mark.asyncio
+    async def test_high_frequency_bonus_prioritizes(self, mock_ctx: MockCtx, prompt_service: Any) -> None:
+        """高频词命中提升评分：高频黑话排在普通黑话之前。"""
+        mock_ctx.add_db_record("Jargon", {
+            "content": "普通词", "meaning": "M1", "is_jargon": True, "is_global": True, "count": 1,
+        })
+        mock_ctx.add_db_record("Jargon", {
+            "content": "热词", "meaning": "M2", "is_jargon": True, "is_global": True, "count": 1,
+        })
+        mock_ctx.add_db_record("HighFrequencyTerm", {
+            "chat_id": "qq:g:1", "term": "热词", "rank": 1, "occurrence_count": 10,
+        })
+        svc = self._svc(mock_ctx, prompt_service)
+        result = await svc._match_jargons("qq:g:1", ["普通词 热词"])
+        assert [r["content"] for r in result] == ["热词", "普通词"]
+
+    @pytest.mark.asyncio
+    async def test_dedup_by_content_and_limit(self, mock_ctx: MockCtx, prompt_service: Any) -> None:
+        """同一条黑话在消息中出现多次只计一次；候选超过上限时截断。"""
+        for i in range(15):
+            mock_ctx.add_db_record("Jargon", {
+                "content": f"词{i}", "meaning": f"释义{i}", "is_jargon": True, "is_global": True, "count": i,
+            })
+        mock_ctx.add_db_record("Jargon", {
+            "content": "重复词", "meaning": "只计一次", "is_jargon": True, "is_global": True, "count": 100,
+        })
+        svc = self._svc(mock_ctx, prompt_service)
+        texts = ["重复词 重复词 重复词"] + [f"词{i}" for i in range(15)]
+        result = await svc._match_jargons("qq:g:1", texts)
+        # count 最高的重复词 + 高频词 14/13... → 结果去重且不超过上限
+        assert len(result) <= 10
+        repeated = [r for r in result if r["content"] == "重复词"]
+        assert len(repeated) == 1
+
+    @pytest.mark.asyncio
+    async def test_empty_text_skipped(self, mock_ctx: MockCtx, prompt_service: Any) -> None:
+        mock_ctx.add_db_record("Jargon", {
+            "content": "yyds", "meaning": "永远滴神", "is_jargon": True, "is_global": True, "count": 5,
+        })
+        svc = self._svc(mock_ctx, prompt_service)
+        assert await svc._match_jargons("qq:g:1", ["", "   ", "   yyds  "]) == [
+            {"content": "yyds", "meaning": "永远滴神"},
+        ]

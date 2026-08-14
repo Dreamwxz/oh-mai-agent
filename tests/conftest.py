@@ -41,6 +41,7 @@ from oh_mai_agent.config import (
     TaskConfig,
 )
 from oh_mai_agent.permission import PermissionResolver, Role
+from oh_mai_agent.domain.status_formatter import StatusFormatter
 from oh_mai_agent.domain.task_record import TaskLevel, TaskRecord, TaskStatus, TriggerType
 from oh_mai_agent.domain.task_store import TaskStore
 from oh_mai_agent.prompt.manager import PromptManager
@@ -385,3 +386,87 @@ def make_task(
         trigger_type=trigger_type,
         **kwargs,
     )
+
+
+class FakeTaskManager:
+    """TaskManager 的内存 fake：记录调用、可注入失败。
+
+    覆盖 planner / api_expose / plugin 层 handler 所需的 TaskManager 接口：
+    ``create_task / list_tasks / get_task / modify_task / cancel_task / task_history``。
+
+    - 每次调用按方法名记入 ``self.calls``（kwargs 列表），便于断言透传参数。
+    - 将方法名加入 ``self.fail`` 集合后，对应方法返回固定失败结果。
+    - 传入真实 ``store`` 时，list / get 基于真实 sqlite 数据（不 mock 持久化）；
+      未传入时 list 返回空列表、get 返回不存在。
+    """
+
+    def __init__(self, store: TaskStore | None = None) -> None:
+        self._store = store
+        self.calls: dict[str, list[dict[str, Any]]] = {}
+        self.fail: set[str] = set()
+        self._sfmt = StatusFormatter()
+
+    def _record(self, name: str, **kwargs: Any) -> None:
+        self.calls.setdefault(name, []).append(kwargs)
+
+    async def create_task(self, **kwargs: Any) -> tuple[bool, TaskRecord | str]:
+        self._record("create_task", **kwargs)
+        if "create_task" in self.fail:
+            return False, "create failed"
+        return True, make_task(
+            task_id="t-created",
+            intent=str(kwargs.get("intent", "")),
+            level=kwargs.get("level") or TaskLevel.AGENT,
+            owner=str(kwargs.get("owner", "")),
+            stream_id=str(kwargs.get("stream_id", "")),
+            platform=str(kwargs.get("platform", "")),
+        )
+
+    async def list_tasks(self, **kwargs: Any) -> list[dict]:
+        self._record("list_tasks", **kwargs)
+        if "list_tasks" in self.fail or self._store is None:
+            return []
+        tasks = await self._store.list(
+            owner=kwargs.get("owner") or None,
+            status=kwargs.get("status"),
+            stream_id=kwargs.get("stream_id"),
+            limit=kwargs.get("limit", 50),
+        )
+        return [
+            {
+                "id": t.id,
+                "title": t.title,
+                "level": t.level.value,
+                "status": t.status.value,
+                "format_status": self._sfmt.format(*t.status_info()),
+                "owner": t.owner,
+            }
+            for t in tasks
+        ]
+
+    async def get_task(self, task_id: str, **kwargs: Any) -> tuple[bool, TaskRecord | str]:
+        self._record("get_task", task_id=task_id, **kwargs)
+        if "get_task" in self.fail:
+            return False, "not found"
+        if self._store is not None:
+            t = await self._store.get(task_id)
+            return (True, t) if t else (False, "not found")
+        return True, make_task(task_id=task_id)
+
+    async def modify_task(self, task_id: str, **kwargs: Any) -> tuple[bool, str]:
+        self._record("modify_task", task_id=task_id, **kwargs)
+        if "modify_task" in self.fail:
+            return False, "modify failed"
+        return True, "已注入"
+
+    async def cancel_task(self, task_id: str, **kwargs: Any) -> tuple[bool, str]:
+        self._record("cancel_task", task_id=task_id, **kwargs)
+        if "cancel_task" in self.fail:
+            return False, "cancel failed"
+        return True, "已取消"
+
+    async def task_history(self, task_id: str, **kwargs: Any) -> tuple[bool, list | str]:
+        self._record("task_history", task_id=task_id, **kwargs)
+        if "task_history" in self.fail:
+            return False, "history failed"
+        return True, [{"type": "status_change", "timestamp": "2025-01-01T00:00:00+00:00"}]

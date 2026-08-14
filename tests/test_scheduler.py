@@ -25,6 +25,7 @@ from oh_mai_agent.domain.task_store import TaskStore
 from oh_mai_agent.executor.base import ExecutionContext
 from oh_mai_agent.executor import instant as instant_module
 from oh_mai_agent.executor.instant import InstantExecutor
+from oh_mai_agent.bus.messages import CommandKind, EventKind, TaskCommand, TaskEvent
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -592,3 +593,475 @@ class TestEnqueueIdempotent:
         await scheduler.enqueue(t)
 
         assert len(scheduler._pending) == 1
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# _check_loop — 后台轮询循环（SCHEDULED 到期触发 / RUNNING 超时检测）
+#
+# 通过将 scheduler 模块内的 ``asyncio`` 引用替换为 shim（sleep 即时返回），
+# 使轮询循环以毫秒级速度迭代，避免真实 1s sleep 拖慢测试；
+# shim 只作用于该模块，不污染全局 asyncio。
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestCheckLoop:
+    @staticmethod
+    def _fast_loop(monkeypatch: Any, scheduler: TaskScheduler) -> Any:
+        """启动一个即时迭代的 _check_loop 后台任务。
+
+        返回 ``(loop_task, real_sleep)``：轮询等待用 real_sleep；
+        测试结束前必须 ``scheduler._stop_event.set()`` 并 await loop_task。
+        """
+        import types
+
+        import oh_mai_agent.core.scheduler as scheduler_module
+
+        real_sleep = asyncio.sleep
+
+        async def _fast_sleep(_: float) -> None:
+            await real_sleep(0)
+
+        shim = types.SimpleNamespace(
+            sleep=_fast_sleep,
+            create_task=asyncio.create_task,
+            CancelledError=asyncio.CancelledError,
+        )
+        monkeypatch.setattr(scheduler_module, "asyncio", shim)
+        loop_task = asyncio.create_task(scheduler._check_loop())
+        return loop_task, real_sleep
+
+    @staticmethod
+    async def _stop_loop(scheduler: TaskScheduler, loop_task: Any) -> None:
+        scheduler._stop_event.set()
+        await loop_task
+
+    @staticmethod
+    async def _wait_for(real_sleep: Any, predicate: Any, timeout_s: float = 5.0) -> bool:
+        """轮询等待 *predicate* 成立（predicate 为 async 可调用）。"""
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            if await predicate():
+                return True
+            await real_sleep(0.005)
+        return False
+
+    @pytest.mark.asyncio
+    async def test_due_scheduled_task_is_triggered_and_dispatched(
+        self, store: TaskStore, task_config: TaskConfig, command_bus: Any,
+        monkeypatch: Any,
+    ) -> None:
+        """SCHEDULED 到期任务被轮询循环触发并派发执行。"""
+        executed: list[str] = []
+
+        async def _exec(t: TaskRecord) -> None:
+            executed.append(t.id)
+
+        scheduler = TaskScheduler(task_config, store, _exec, command_bus=command_bus)
+
+        t = make_task(
+            "due", status=TaskStatus.SCHEDULED, trigger_type=TriggerType.DELAY,
+            scheduled_at=datetime.now() - timedelta(seconds=5),
+        )
+        await store.save(t)
+
+        loop_task, real_sleep = self._fast_loop(monkeypatch, scheduler)
+        try:
+            async def _ran() -> bool:
+                return bool(executed)
+
+            assert await self._wait_for(real_sleep, _ran)
+            assert executed == ["due"]
+        finally:
+            await self._stop_loop(scheduler, loop_task)
+
+    @pytest.mark.asyncio
+    async def test_future_scheduled_task_not_triggered(
+        self, store: TaskStore, task_config: TaskConfig, command_bus: Any,
+        monkeypatch: Any,
+    ) -> None:
+        """未到触发时间的 SCHEDULED 任务保持状态不变。"""
+        scheduler = TaskScheduler(task_config, store, _noop_executor, command_bus=command_bus)
+
+        t = make_task(
+            "future", status=TaskStatus.SCHEDULED, trigger_type=TriggerType.DELAY,
+            scheduled_at=datetime.now() + timedelta(hours=1),
+        )
+        await store.save(t)
+
+        loop_task, real_sleep = self._fast_loop(monkeypatch, scheduler)
+        try:
+            await real_sleep(0.05)  # 跑若干轮迭代
+            updated = await store.get("future")
+            assert updated is not None
+            assert updated.status == TaskStatus.SCHEDULED
+        finally:
+            await self._stop_loop(scheduler, loop_task)
+
+    @pytest.mark.asyncio
+    async def test_scheduled_without_time_not_triggered(
+        self, store: TaskStore, task_config: TaskConfig, command_bus: Any,
+        monkeypatch: Any,
+    ) -> None:
+        """SCHEDULED 但无 scheduled_at 的任务被跳过，避免误触发。"""
+        scheduler = TaskScheduler(task_config, store, _noop_executor, command_bus=command_bus)
+
+        t = make_task("no-ts", status=TaskStatus.SCHEDULED, trigger_type=TriggerType.DELAY)
+        await store.save(t)
+
+        loop_task, real_sleep = self._fast_loop(monkeypatch, scheduler)
+        try:
+            await real_sleep(0.05)
+            updated = await store.get("no-ts")
+            assert updated is not None
+            assert updated.status == TaskStatus.SCHEDULED
+        finally:
+            await self._stop_loop(scheduler, loop_task)
+
+    @pytest.mark.asyncio
+    async def test_overdue_running_task_is_failed(
+        self, store: TaskStore, command_bus: Any, monkeypatch: Any,
+    ) -> None:
+        """超过 max_runtime_min 的 RUNNING 任务被降级为 FAILED 并移出运行集。"""
+        cfg = TaskConfig(max_concurrent_tasks=2, max_runtime_min=1)
+        scheduler = TaskScheduler(cfg, store, _noop_executor, command_bus=command_bus)
+
+        t = make_task(
+            "slow", status=TaskStatus.RUNNING,
+            started_at=datetime.now() - timedelta(minutes=10),
+        )
+        await store.save(t)
+        scheduler._running.add("slow")
+
+        loop_task, real_sleep = self._fast_loop(monkeypatch, scheduler)
+        try:
+            async def _is_failed() -> bool:
+                t = await store.get("slow")
+                return t is not None and t.status == TaskStatus.FAILED
+
+            assert await self._wait_for(real_sleep, _is_failed)
+            assert "slow" not in scheduler._running
+        finally:
+            await self._stop_loop(scheduler, loop_task)
+
+    @pytest.mark.asyncio
+    async def test_running_within_timeout_stays_running(
+        self, store: TaskStore, command_bus: Any, monkeypatch: Any,
+    ) -> None:
+        """未超时的 RUNNING 任务不被降级。"""
+        cfg = TaskConfig(max_concurrent_tasks=2, max_runtime_min=60)
+        scheduler = TaskScheduler(cfg, store, _noop_executor, command_bus=command_bus)
+
+        t = make_task(
+            "fresh", status=TaskStatus.RUNNING,
+            started_at=datetime.now() - timedelta(seconds=30),
+        )
+        await store.save(t)
+        scheduler._running.add("fresh")
+
+        loop_task, real_sleep = self._fast_loop(monkeypatch, scheduler)
+        try:
+            await real_sleep(0.05)
+            updated = await store.get("fresh")
+            assert updated is not None
+            assert updated.status == TaskStatus.RUNNING
+        finally:
+            await self._stop_loop(scheduler, loop_task)
+
+    @pytest.mark.asyncio
+    async def test_coop_paused_running_task_skips_timeout(
+        self, store: TaskStore, command_bus: Any, monkeypatch: Any,
+    ) -> None:
+        """协作暂停（_coop_paused）的 RUNNING 任务不参与超时检测。"""
+        cfg = TaskConfig(max_concurrent_tasks=2, max_runtime_min=1)
+        scheduler = TaskScheduler(cfg, store, _noop_executor, command_bus=command_bus)
+
+        t = make_task(
+            "coop", status=TaskStatus.RUNNING,
+            started_at=datetime.now() - timedelta(minutes=10),
+        )
+        t.metadata["_coop_paused"] = True
+        await store.save(t)
+        scheduler._running.add("coop")
+
+        loop_task, real_sleep = self._fast_loop(monkeypatch, scheduler)
+        try:
+            await real_sleep(0.05)
+            updated = await store.get("coop")
+            assert updated is not None
+            assert updated.status == TaskStatus.RUNNING
+        finally:
+            await self._stop_loop(scheduler, loop_task)
+
+    @pytest.mark.asyncio
+    async def test_non_running_task_discarded_from_running_set(
+        self, store: TaskStore, command_bus: Any, monkeypatch: Any,
+    ) -> None:
+        """_running 集合中已非 RUNNING 的任务（如完成但未收到事件）被清理。"""
+        cfg = TaskConfig(max_concurrent_tasks=2, max_runtime_min=1)
+        scheduler = TaskScheduler(cfg, store, _noop_executor, command_bus=command_bus)
+
+        t = make_task("done", status=TaskStatus.COMPLETED)
+        await store.save(t)
+        scheduler._running.add("done")
+
+        loop_task, real_sleep = self._fast_loop(monkeypatch, scheduler)
+        try:
+            await real_sleep(0.05)
+            assert "done" not in scheduler._running
+        finally:
+            await self._stop_loop(scheduler, loop_task)
+
+    @pytest.mark.asyncio
+    async def test_list_active_failure_tolerated_by_loop(
+        self, store: TaskStore, task_config: TaskConfig, command_bus: Any,
+        monkeypatch: Any,
+    ) -> None:
+        """list_active 查询失败时循环继续运行（不崩溃）。"""
+        scheduler = TaskScheduler(task_config, store, _noop_executor, command_bus=command_bus)
+
+        async def _boom() -> list:
+            raise RuntimeError("db down")
+
+        monkeypatch.setattr(store, "list_active", _boom)
+
+        loop_task, real_sleep = self._fast_loop(monkeypatch, scheduler)
+        try:
+            await real_sleep(0.05)  # 多轮迭代均不应抛异常
+            assert not loop_task.done() or loop_task.exception() is None
+        finally:
+            await self._stop_loop(scheduler, loop_task)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 错误路径与防御分支（stop / cancel / pause / resume / 事件监听 / 安全执行）
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestSchedulerErrorPaths:
+    @pytest.mark.asyncio
+    async def test_stop_tolerates_store_get_failure(
+        self, store: TaskStore, task_config: TaskConfig, command_bus: Any,
+    ) -> None:
+        """停止时获取运行中任务失败 → 记日志继续，不抛异常。"""
+        scheduler = TaskScheduler(task_config, store, _noop_executor, command_bus=command_bus)
+        t = make_task("stop-1", status=TaskStatus.RUNNING)
+        await store.save(t)
+        scheduler._running.add("stop-1")
+
+        async def _boom(task_id: str) -> Any:
+            raise RuntimeError("db down")
+
+        real_get = store.get
+        store.get = _boom  # type: ignore[method-assign]
+        try:
+            await scheduler.stop()
+        finally:
+            store.get = real_get  # type: ignore[method-assign]
+        assert scheduler._running == set()
+
+    @pytest.mark.asyncio
+    async def test_stop_tolerates_store_save_failure(
+        self, store: TaskStore, task_config: TaskConfig, command_bus: Any,
+    ) -> None:
+        """停止时暂停任务落盘失败 → 记日志继续。"""
+        scheduler = TaskScheduler(task_config, store, _noop_executor, command_bus=command_bus)
+        t = make_task("stop-2", status=TaskStatus.RUNNING)
+        await store.save(t)
+        scheduler._running.add("stop-2")
+
+        real_save = store.save
+        async def _boom_save(task: Any, expected_status: Any = None) -> Any:
+            if task.id == "stop-2":
+                raise RuntimeError("save down")
+            return await real_save(task, expected_status)
+
+        store.save = _boom_save  # type: ignore[method-assign]
+        try:
+            await scheduler.stop()  # 不应抛异常
+        finally:
+            store.save = real_save  # type: ignore[method-assign]
+
+    @pytest.mark.asyncio
+    async def test_cancel_tolerates_store_get_failure(
+        self, store: TaskStore, task_config: TaskConfig, command_bus: Any,
+    ) -> None:
+        scheduler = TaskScheduler(task_config, store, _noop_executor, command_bus=command_bus)
+        async def _boom(task_id: str) -> Any:
+            raise RuntimeError("db down")
+
+        real_get = store.get
+        store.get = _boom  # type: ignore[method-assign]
+        try:
+            assert await scheduler.cancel("x") is False
+        finally:
+            store.get = real_get  # type: ignore[method-assign]
+
+    @pytest.mark.asyncio
+    async def test_cancel_running_agent_sends_command(
+        self, store: TaskStore, task_config: TaskConfig, command_bus: Any,
+    ) -> None:
+        """RUNNING agent 任务取消 → 经命令总线发 CANCEL（协作式取消）。"""
+        scheduler = TaskScheduler(task_config, store, _noop_executor, command_bus=command_bus)
+        t = make_task("cancel-me", level=TaskLevel.AGENT, status=TaskStatus.RUNNING)
+        await store.save(t)
+        scheduler._running.add("cancel-me")
+
+        received: list[TaskCommand] = []
+
+        async def handler(cmd: TaskCommand) -> None:
+            received.append(cmd)
+
+        command_bus.subscribe("cancel-me", handler)
+        assert await scheduler.cancel("cancel-me") is True
+        assert [c.kind for c in received] == [CommandKind.CANCEL]
+
+    @pytest.mark.asyncio
+    async def test_pause_tolerates_store_get_failure(
+        self, store: TaskStore, task_config: TaskConfig, command_bus: Any,
+    ) -> None:
+        scheduler = TaskScheduler(task_config, store, _noop_executor, command_bus=command_bus)
+        async def _boom(task_id: str) -> Any:
+            raise RuntimeError("db down")
+
+        real_get = store.get
+        store.get = _boom  # type: ignore[method-assign]
+        try:
+            assert await scheduler.pause("x") is False
+        finally:
+            store.get = real_get  # type: ignore[method-assign]
+
+    @pytest.mark.asyncio
+    async def test_resume_coop_paused_running_task(
+        self, store: TaskStore, task_config: TaskConfig, command_bus: Any,
+    ) -> None:
+        """RUNNING + _coop_paused → 清除标记、重置 started_at、发 RESUME 命令。"""
+        scheduler = TaskScheduler(task_config, store, _noop_executor, command_bus=command_bus)
+        t = make_task("resume-me", status=TaskStatus.RUNNING)
+        t.metadata["_coop_paused"] = True
+        await store.save(t)
+        scheduler._running.add("resume-me")
+
+        received: list[TaskCommand] = []
+
+        async def handler(cmd: TaskCommand) -> None:
+            received.append(cmd)
+
+        command_bus.subscribe("resume-me", handler)
+        assert await scheduler.resume("resume-me") is True
+        assert [c.kind for c in received] == [CommandKind.RESUME]
+        updated = await store.get("resume-me")
+        assert updated is not None
+        assert "_coop_paused" not in updated.metadata
+        assert updated.started_at is not None
+
+    @pytest.mark.asyncio
+    async def test_resume_non_paused_status_returns_false(
+        self, store: TaskStore, task_config: TaskConfig, command_bus: Any,
+    ) -> None:
+        """非 PAUSED 且非协作暂停的 RUNNING 任务 → 拒绝恢复。"""
+        scheduler = TaskScheduler(task_config, store, _noop_executor, command_bus=command_bus)
+        t = make_task("no-pause", status=TaskStatus.RUNNING)
+        await store.save(t)
+        assert await scheduler.resume("no-pause") is False
+
+    @pytest.mark.asyncio
+    async def test_enqueue_tolerates_save_failure(
+        self, store: TaskStore, task_config: TaskConfig, command_bus: Any,
+    ) -> None:
+        """入队时持久化失败 → 记日志不抛出。"""
+        scheduler = TaskScheduler(task_config, store, _noop_executor, command_bus=command_bus)
+        t = make_task("enq-fail", trigger_type=TriggerType.DELAY, delay_seconds=10)
+
+        real_save = store.save
+        async def _boom_save(task: Any, expected_status: Any = None) -> Any:
+            raise RuntimeError("save down")
+
+        store.save = _boom_save  # type: ignore[method-assign]
+        try:
+            await scheduler.enqueue(t)  # 不应抛异常
+        finally:
+            store.save = real_save  # type: ignore[method-assign]
+
+    @pytest.mark.asyncio
+    async def test_event_listener_ignores_non_event(
+        self, store: TaskStore, task_config: TaskConfig, command_bus: Any,
+    ) -> None:
+        scheduler = TaskScheduler(task_config, store, _noop_executor, command_bus=command_bus)
+        await scheduler._on_task_event("not-an-event")  # 不应抛异常
+
+    @pytest.mark.asyncio
+    async def test_event_listener_ignores_unknown_kind(
+        self, store: TaskStore, task_config: TaskConfig, command_bus: Any,
+    ) -> None:
+        scheduler = TaskScheduler(task_config, store, _noop_executor, command_bus=command_bus)
+        event = TaskEvent(task_id="t1", kind=EventKind.WAITING_INPUT)
+        await scheduler._on_task_event(event)  # 非终态事件不释放额度
+
+    @pytest.mark.asyncio
+    async def test_event_listener_tolerates_missing_task(
+        self, store: TaskStore, task_config: TaskConfig, command_bus: Any,
+    ) -> None:
+        scheduler = TaskScheduler(task_config, store, _noop_executor, command_bus=command_bus)
+        event = TaskEvent(task_id="ghost", kind=EventKind.COMPLETED)
+        await scheduler._on_task_event(event)  # 任务不存在 → 记警告返回
+
+    @pytest.mark.asyncio
+    async def test_event_listener_releases_slot_on_completed(
+        self, store: TaskStore, task_config: TaskConfig, command_bus: Any,
+    ) -> None:
+        """收到 COMPLETED 事件 → 从运行集移除并触发补位派发。"""
+        started: list[str] = []
+        event = asyncio.Event()
+
+        async def _tracked(t: TaskRecord) -> None:
+            started.append(t.id)
+            await event.wait()
+
+        scheduler = TaskScheduler(task_config, store, _tracked, command_bus=command_bus)
+        t1 = make_task("evt-1", status=TaskStatus.RUNNING)
+        t2 = make_task("evt-2", status=TaskStatus.PENDING)
+        await store.save(t1)
+        await store.save(t2)
+        await scheduler.enqueue(t2)  # 额度空闲 → 直接启动
+        scheduler._running.add("evt-1")
+
+        event.set()
+        await asyncio.sleep(0.02)
+
+        await scheduler._on_task_event(TaskEvent(task_id="evt-1", kind=EventKind.COMPLETED))
+        assert "evt-1" not in scheduler._running
+
+    @pytest.mark.asyncio
+    async def test_safe_execute_tolerates_executor_exception(
+        self, store: TaskStore, task_config: TaskConfig, command_bus: Any,
+    ) -> None:
+        async def _boom(t: TaskRecord) -> None:
+            raise RuntimeError("executor boom")
+
+        scheduler = TaskScheduler(task_config, store, _boom, command_bus=command_bus)
+        t = make_task("boom-1")
+        await scheduler._safe_execute(t, _boom)  # 不应抛出
+
+    @pytest.mark.asyncio
+    async def test_safe_execute_tolerates_cancellation(
+        self, store: TaskStore, task_config: TaskConfig, command_bus: Any,
+    ) -> None:
+        async def _cancel(t: TaskRecord) -> None:
+            raise asyncio.CancelledError
+
+        scheduler = TaskScheduler(task_config, store, _cancel, command_bus=command_bus)
+        t = make_task("cancel-1")
+        await scheduler._safe_execute(t, _cancel)  # 不应抛出
+
+    @pytest.mark.asyncio
+    async def test_try_start_illegal_transition_returns_false(
+        self, store: TaskStore, task_config: TaskConfig, command_bus: Any,
+    ) -> None:
+        """pending 中任务已被并发取消 → 启动转换失败，任务回到队首。"""
+        scheduler = TaskScheduler(task_config, store, _noop_executor, command_bus=command_bus)
+        t = make_task("race-1", status=TaskStatus.PENDING)
+        await store.save(t)
+        t.force(TaskStatus.CANCELLED, actor="test", reason="concurrent-cancel")
+        scheduler._pending.append(t)
+
+        await scheduler._try_dispatch()
+        assert scheduler._running == set()
+        assert any(x.id == "race-1" for x in scheduler._pending)

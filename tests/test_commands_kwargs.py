@@ -674,3 +674,79 @@ class TestCmdReplyUnifiedSend:
 
         with patch("oh_mai_agent.executor.instant.send_final_reply", _boom):
             await commands_module.cmd_reply(plugin, "qq:group:123", "响应")  # 不应抛异常
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 命令失败路径（底层 TaskManager 返回失败时的回复与返回码）
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestCmdFailurePaths:
+    @pytest.mark.asyncio
+    async def test_create_failure_replies_error(
+        self, plugin: MaibotAgentPlugin, base_kwargs: dict[str, Any],
+    ) -> None:
+        plugin._task_manager.create_task = AsyncMock(return_value=(False, "boom"))  # type: ignore[method-assign]
+        ok, reply, code = await plugin._cmd_create(**base_kwargs)
+        assert ok is False
+        assert "创建失败: boom" in reply
+        assert code == 2
+
+    @pytest.mark.asyncio
+    async def test_status_failure_replies_error(
+        self, plugin: MaibotAgentPlugin, base_kwargs: dict[str, Any],
+    ) -> None:
+        base_kwargs = {**base_kwargs, "text": "/maitask status task-1"}
+        plugin._task_manager.get_task = AsyncMock(return_value=(False, "not found"))  # type: ignore[method-assign]
+        ok, reply, _ = await plugin._cmd_status(**base_kwargs)
+        assert ok is False
+        assert "查询失败: not found" in reply
+
+    @pytest.mark.asyncio
+    async def test_cancel_failure_replies_error(
+        self, plugin: MaibotAgentPlugin, base_kwargs: dict[str, Any],
+    ) -> None:
+        base_kwargs = {**base_kwargs, "text": "/maitask cancel task-1"}
+        plugin._task_manager.cancel_task = AsyncMock(return_value=(False, "boom"))  # type: ignore[method-assign]
+        ok, reply, _ = await plugin._cmd_cancel(**base_kwargs)
+        assert ok is False
+        assert "取消失败: boom" in reply
+
+    @pytest.mark.asyncio
+    async def test_history_failure_replies_error(
+        self, plugin: MaibotAgentPlugin, base_kwargs: dict[str, Any],
+    ) -> None:
+        base_kwargs = {**base_kwargs, "text": "/maitask history task-1"}
+        plugin._task_manager.task_history = AsyncMock(return_value=(False, "boom"))  # type: ignore[method-assign]
+        ok, reply, _ = await plugin._cmd_history(**base_kwargs)
+        assert ok is False
+        assert "查询历史失败: boom" in reply
+
+    @pytest.mark.asyncio
+    async def test_history_empty_replies_no_records(
+        self, plugin: MaibotAgentPlugin, base_kwargs: dict[str, Any],
+    ) -> None:
+        base_kwargs = {**base_kwargs, "text": "/maitask history task-1"}
+        plugin._task_manager.task_history = AsyncMock(return_value=(True, []))  # type: ignore[method-assign]
+        ok, reply, _ = await plugin._cmd_history(**base_kwargs)
+        assert ok is True
+        assert "该任务暂无历史记录。" in reply
+
+    @pytest.mark.asyncio
+    async def test_ask_failure_replies_error(
+        self, plugin: MaibotAgentPlugin, base_kwargs: dict[str, Any],
+    ) -> None:
+        base_kwargs = {**base_kwargs, "text": "/maitask ask task-1 继续"}
+        plugin._task_manager.modify_task = AsyncMock(return_value=(False, "boom"))  # type: ignore[method-assign]
+        ok, reply, _ = await plugin._cmd_ask(**base_kwargs)
+        assert ok is False
+        assert "注入失败: boom" in reply
+
+    @pytest.mark.asyncio
+    async def test_create_infers_platform_from_stream_id(
+        self, plugin: MaibotAgentPlugin, base_kwargs: dict[str, Any],
+    ) -> None:
+        """platform 缺省时从 stream_id 推断（覆盖 resolve_caller 推断分支）。"""
+        kwargs = {**base_kwargs, "platform": ""}
+        ok, _, _ = await plugin._cmd_create(**kwargs)
+        assert ok is True
+        assert plugin._task_manager.created[-1]["platform"] == "qq"

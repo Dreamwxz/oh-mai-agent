@@ -537,3 +537,180 @@ class TestRequesterResolution:
         assert await executor._resolve_requester(
             mock_ctx, make_task("r5", owner="qq:10001", platform="qq")
         ) == "卡名"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# fail_task — 失败标记的容错分支
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestFailTaskBranches:
+    @pytest.mark.asyncio
+    async def test_store_get_failure_tolerated(
+        self, real_store: Any, mock_ctx: MockCtx,
+    ) -> None:
+        """store.get 抛异常 → 视为无持久化记录，继续标记 FAILED。"""
+        from unittest.mock import AsyncMock
+
+        from oh_mai_agent.core.scheduler import TaskScheduler
+        from oh_mai_agent.config import TaskConfig
+
+        store = real_store
+        await store.init()
+        scheduler = TaskScheduler(
+            TaskConfig(max_concurrent_tasks=2), store,
+            lambda t: asyncio.sleep(0), command_bus=AsyncMock(),
+        )
+        scheduler.on_task_completed = AsyncMock()
+
+        task = make_task("ft-1", status=TaskStatus.RUNNING)
+        await store.save(task)
+        exec_ctx = ExecutionContext(
+            ctx=mock_ctx, store=store, scheduler=scheduler,
+            config=MaibotAgentConfig(),
+        )
+
+        real_get = store.get
+        store.get = AsyncMock(side_effect=RuntimeError("db down"))  # type: ignore[method-assign]
+        try:
+            await fail_task(task, store, scheduler, exec_ctx)
+        finally:
+            store.get = real_get  # type: ignore[method-assign]
+
+        persisted = await store.get("ft-1")
+        assert persisted is not None
+        assert persisted.status == TaskStatus.FAILED
+        scheduler.on_task_completed.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_send_message_failure_does_not_block(
+        self, real_store: Any, mock_ctx: MockCtx,
+    ) -> None:
+        """send_message=True 且发送失败 → 任务仍标记 FAILED。"""
+        from unittest.mock import AsyncMock
+
+        from oh_mai_agent.core.scheduler import TaskScheduler
+        from oh_mai_agent.config import TaskConfig
+
+        store = real_store
+        await store.init()
+        scheduler = TaskScheduler(
+            TaskConfig(max_concurrent_tasks=2), store,
+            lambda t: asyncio.sleep(0), command_bus=AsyncMock(),
+        )
+        scheduler.on_task_completed = AsyncMock()
+
+        task = make_task("ft-2", status=TaskStatus.RUNNING)
+        task.metadata["_error"] = "炸了"
+        await store.save(task)
+        exec_ctx = ExecutionContext(
+            ctx=mock_ctx, store=store, scheduler=scheduler,
+            config=MaibotAgentConfig(),
+        )
+
+        with patch("oh_mai_agent.executor.instant.send_final_reply",
+                   AsyncMock(side_effect=RuntimeError("send down"))):
+            await fail_task(task, store, scheduler, exec_ctx, send_message=True)
+
+        persisted = await store.get("ft-2")
+        assert persisted is not None
+        assert persisted.status == TaskStatus.FAILED
+        scheduler.on_task_completed.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_illegal_transition_falls_back_to_force(
+        self, real_store: Any, mock_ctx: MockCtx,
+    ) -> None:
+        """非法状态转换（SCHEDULED → FAILED）→ force 兜底仍标记 FAILED。"""
+        from unittest.mock import AsyncMock
+
+        from oh_mai_agent.core.scheduler import TaskScheduler
+        from oh_mai_agent.config import TaskConfig
+
+        store = real_store
+        await store.init()
+        scheduler = TaskScheduler(
+            TaskConfig(max_concurrent_tasks=2), store,
+            lambda t: asyncio.sleep(0), command_bus=AsyncMock(),
+        )
+        scheduler.on_task_completed = AsyncMock()
+
+        task = make_task(
+            "ft-3", status=TaskStatus.SCHEDULED, trigger_type=TriggerType.DELAY,
+        )
+        await store.save(task)
+        exec_ctx = ExecutionContext(
+            ctx=mock_ctx, store=store, scheduler=scheduler,
+            config=MaibotAgentConfig(),
+        )
+        await fail_task(task, store, scheduler, exec_ctx)
+
+        persisted = await store.get("ft-3")
+        assert persisted is not None
+        assert persisted.status == TaskStatus.FAILED
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# InstantExecutor — 内部方法分支
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestInstantExecutorBranches:
+    @pytest.mark.asyncio
+    async def test_resolve_requester_exception_falls_back_empty(
+        self, mock_ctx: MockCtx,
+    ) -> None:
+        """流列表查询异常 → 委托人为空串。"""
+        mock_ctx.chat.get_all_streams = AsyncMock(side_effect=RuntimeError("chat down"))  # type: ignore[method-assign]
+        executor = InstantExecutor()
+        task = make_task("rq-1", owner="qq:10001")
+        assert await executor._resolve_requester(mock_ctx, task) == ""
+
+    @pytest.mark.asyncio
+    async def test_resolve_requester_no_colon_owner(self, mock_ctx: MockCtx) -> None:
+        executor = InstantExecutor()
+        task = make_task("rq-2", owner="no-colon")
+        assert await executor._resolve_requester(mock_ctx, task) == ""
+
+    @pytest.mark.asyncio
+    async def test_append_motivation_note_skips_without_cross_stream(
+        self, mock_ctx: MockCtx,
+    ) -> None:
+        """非跨流回复（无 reply_stream_id 且无 _is_reply）→ 不写动机注释。"""
+        executor = InstantExecutor()
+        task = make_task("mn-1")
+        exec_ctx = ExecutionContext(
+            ctx=mock_ctx, store=AsyncMock(), scheduler=AsyncMock(),
+            config=MaibotAgentConfig(), prompt_service=_make_prompt_service(),
+        )
+        await executor._append_motivation_note(exec_ctx, task)
+        assert mock_ctx.maisaka.appends == []
+
+    @pytest.mark.asyncio
+    async def test_append_motivation_note_skips_without_prompt_service(
+        self, mock_ctx: MockCtx,
+    ) -> None:
+        """无 prompt_service → 不写动机注释。"""
+        executor = InstantExecutor()
+        task = make_task("mn-2")
+        task.metadata["_is_reply"] = True
+        exec_ctx = ExecutionContext(
+            ctx=mock_ctx, store=AsyncMock(), scheduler=AsyncMock(),
+            config=MaibotAgentConfig(), prompt_service=None,
+        )
+        await executor._append_motivation_note(exec_ctx, task)
+        assert mock_ctx.maisaka.appends == []
+
+    @pytest.mark.asyncio
+    async def test_append_motivation_note_append_failure_swallowed(
+        self, mock_ctx: MockCtx,
+    ) -> None:
+        """上下文写入异常 → 仅记日志，不抛出。"""
+        executor = InstantExecutor()
+        task = make_task("mn-3")
+        task.metadata["_is_reply"] = True
+        exec_ctx = ExecutionContext(
+            ctx=mock_ctx, store=AsyncMock(), scheduler=AsyncMock(),
+            config=MaibotAgentConfig(), prompt_service=_make_prompt_service(),
+        )
+        with patch.object(mock_ctx.maisaka.context, "append",
+                          AsyncMock(side_effect=RuntimeError("append down"))):
+            await executor._append_motivation_note(exec_ctx, task)  # 不应抛异常

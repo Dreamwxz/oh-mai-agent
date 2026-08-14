@@ -397,3 +397,93 @@ class TestBusHandlerResilience:
 
         # 第一个事件触发异常，第二个事件仍被处理 → 监听循环未死
         assert [e.task_id for e in received] == ["t2"]
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 消息解析辅助（_ensure_utc / _parse_datetime / _coerce_payload / 缺省 kind）
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestMessageParseHelpers:
+    def test_ensure_utc_none_uses_current_utc(self) -> None:
+        from datetime import datetime, timezone
+
+        from oh_mai_agent.bus.messages import _ensure_utc
+
+        dt = _ensure_utc(None)
+        assert dt.tzinfo is not None
+        assert dt.tzinfo is timezone.utc
+        assert abs((datetime.now(timezone.utc) - dt).total_seconds()) < 5
+
+    def test_ensure_utc_naive_assumed_utc(self) -> None:
+        from datetime import datetime, timezone
+
+        from oh_mai_agent.bus.messages import _ensure_utc
+
+        naive = datetime(2025, 1, 1, 12, 0, 0)
+        dt = _ensure_utc(naive)
+        assert dt.tzinfo is timezone.utc
+        assert dt.hour == 12  # 不换算，仅标记 UTC
+
+    def test_ensure_utc_aware_converted(self) -> None:
+        from datetime import datetime, timedelta, timezone
+
+        from oh_mai_agent.bus.messages import _ensure_utc
+
+        aware = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone(timedelta(hours=8)))
+        dt = _ensure_utc(aware)
+        assert dt.tzinfo is timezone.utc
+        assert dt.hour == 4  # +8 时区 → UTC 减 8 小时
+
+    def test_parse_datetime_none(self) -> None:
+        from oh_mai_agent.bus.messages import _parse_datetime
+
+        assert _parse_datetime(None) is None
+
+    def test_parse_datetime_passthrough(self) -> None:
+        from datetime import datetime
+
+        from oh_mai_agent.bus.messages import _parse_datetime
+
+        dt = datetime(2025, 1, 1)
+        assert _parse_datetime(dt) is dt
+
+    def test_parse_datetime_iso_string(self) -> None:
+        from datetime import datetime
+
+        from oh_mai_agent.bus.messages import _parse_datetime
+
+        dt = _parse_datetime("2025-01-01T12:00:00")
+        assert dt is not None
+        assert dt.year == 2025
+        assert dt.tzinfo is not None  # naive 字符串自动标记 UTC
+
+    def test_parse_datetime_invalid_returns_none(self) -> None:
+        from oh_mai_agent.bus.messages import _parse_datetime
+
+        assert _parse_datetime("not-a-date") is None
+        assert _parse_datetime(12345) is None
+
+    def test_coerce_payload_dict_passthrough(self) -> None:
+        from oh_mai_agent.bus.messages import _coerce_payload
+
+        payload = {"a": 1}
+        assert _coerce_payload(payload) is payload
+
+    def test_coerce_payload_non_dict_falls_back_empty(self) -> None:
+        from oh_mai_agent.bus.messages import _coerce_payload
+
+        assert _coerce_payload("junk") == {}
+        assert _coerce_payload(None) == {}
+        assert _coerce_payload([1, 2]) == {}
+
+    def test_command_from_dict_missing_kind_defaults_inject(self) -> None:
+        from oh_mai_agent.bus.messages import TaskCommand
+
+        cmd = TaskCommand.from_dict({"task_id": "t1"})
+        assert cmd.kind == CommandKind.INJECT_INSTRUCTION
+
+    def test_event_from_dict_missing_kind_defaults_completed(self) -> None:
+        from oh_mai_agent.bus.messages import TaskEvent
+
+        event = TaskEvent.from_dict({"task_id": "t1"})
+        assert event.kind == EventKind.COMPLETED
