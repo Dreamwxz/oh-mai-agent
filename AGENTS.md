@@ -15,7 +15,7 @@ oh-mai-agent 是 MaiBot 的离线多线程 Agent 插件（Python ≥ 3.10，插�
 枚举（`domain/task_record.py:26-29`）定义 `instant` / `agent` 两级。工具呈现同理分两层：
 Essential 层仅 `ask_user`（始终可见）；Discoverable 层按需发现，Agent 循环经合成工具
 `list_tools` / `get_tool_schema`（`tools/synthetic/discovery.py`）动态获取。主 Planner 只见
-9 个 @Tool 安全子集（`tools/planner/` handler 工厂 + `plugin.py` 注册）。
+11 个 @Tool 安全子集（`tools/planner/` handler 工厂 + `plugin.py` 注册）。
 
 **命令总线与调度链**。任务执行需要跨组件协作（注入指令、唤醒、取消、暂停），故有
 TaskCommandBus（`bus/command_bus.py`），经 LoopbackTransport（`bus/transport.py`，进程内
@@ -58,7 +58,7 @@ agent_system / title / polish / planner_board / injection / context_note / subag
 
 **目录结构**（散文式，不用多级缩进树）：
 
-- 根目录单文件模块：`plugin.py`（入口，注册 9 @Tool / 7 @Command）、`config.py`（10 节配置）、
+- 根目录单文件模块：`plugin.py`（入口，注册 11 个 @Tool / 7 @Command）、`config.py`（10 节配置）、
   `permission.py`、`api_expose.py`、`planner_hooks.py`、`commands.py`、`lifecycle.py`
   （唯一组装点，load_plugin 编排全部依赖）、`_manifest.json`
 - `bus/`：命令总线，消息 + LoopbackTransport（唯一实现）+ TaskCommandBus 路由
@@ -148,4 +148,5 @@ refactor(domain): remove planner task level and legacy level map
 | `domain/task_record.py` | 无 schema 版本管理，数据模型升级无法自动迁移 | [01-task-model](docs/features/01-task-model.md) |
 | `plugin.py` | 对外 @Tool 名 `task_delete` 与 @Command 名 `task_cancel` 不一致 | [01-task-model](docs/features/01-task-model.md) |
 | `config.py [task]` | `default_timeout_min` 已配置但实际未执行 | [14-config](docs/features/14-config.md) |
+| `tools/mcp/connection.py` | stdio 发送侧固定 newline 帧（适配 MCP SDK <2.0；读取侧双格式兼容）；若宿主切换 mcp SDK 2.0 需适配发送侧，manifest 已 pin `mcp>=1.1.3,<2.0.0` | [08-mcp](docs/features/08-mcp.md) |
 | 代码注释 12 处 | 裸 § 节号引用残留（plugin.py / domain / tools 等文件） | 已知遗留，不修复 |
