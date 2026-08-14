@@ -190,21 +190,10 @@ class AgentLoop:
         task.transition(TaskStatus.WAITING_INPUT)
         await self._store.save(task)
 
-        await self._command_bus.publish(
-            TaskEvent(
-                task_id=task.id,
-                kind=EventKind.WAITING_INPUT,
-                payload={"question": question},
-            )
-        )
-
-        async def _on_resume_reply(cmd: TaskCommand) -> None:
-            if cmd.kind == CommandKind.RESUME_REPLY:
-                resume_event.set()
-
-        self._command_bus.subscribe(task.id, _on_resume_reply)
-
         # 回调在挂起信号就绪后调用（发消息给用户）
+        # 唤醒不依赖事件广播：用户回复经 chat.receive.after_process Hook →
+        # TaskControl.handle_user_reply → bus.send(RESUME_REPLY)，由主订阅
+        # _on_bus_command 的 RESUME_REPLY 分支写入 _user_reply 并 set resume_event。
         if self._on_ask is not None:
             await self._on_ask(task.stream_id, question)
         else:

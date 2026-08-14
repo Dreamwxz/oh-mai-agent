@@ -9,7 +9,6 @@ import pytest
 from conftest import MockCtx, MockLLM
 from oh_mai_agent.config import MaibotAgentConfig, PermissionConfig
 from oh_mai_agent.bus.command_bus import TaskCommandBus
-from oh_mai_agent.bus.transport import LoopbackTransport
 from oh_mai_agent.core.scheduler import TaskScheduler
 from oh_mai_agent.core.task_manager import TaskManager
 from oh_mai_agent.domain.task_record import TaskLevel, TaskRecord, TaskStatus, TriggerType
@@ -35,7 +34,7 @@ async def _make_manager(
     await store.init()
     config = MaibotAgentConfig(permission=role_config)
     resolver = PermissionResolver(config.permission)
-    command_bus = TaskCommandBus(LoopbackTransport())
+    command_bus = TaskCommandBus()
     scheduler = TaskScheduler(config.task, store, _noop_executor, command_bus=command_bus)
     registry = ToolRegistry()
     prompt_manager = PromptManager(Path(__file__).resolve().parent.parent / "prompt" / "templates")

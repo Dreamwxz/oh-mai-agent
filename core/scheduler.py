@@ -593,26 +593,3 @@ class TaskScheduler:
             raise
         except Exception:
             logger.exception("调度器检查循环发生致命错误")
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# TaskStore 接口类型（用于类型注解，实际存储由 task_store.py 提供）
-# ═══════════════════════════════════════════════════════════════════════
-
-from typing import Protocol
-
-
-class TaskStore(Protocol):
-    """TaskStore 接口契约。
-
-    task_store.py 实现以下方法：
-    - save(task) → None：持久化任务
-    - get(task_id) → TaskRecord | None：按 ID 获取任务
-    - list_active() → list[TaskRecord]：列出所有非终态任务
-    """
-
-    async def save(self, task: TaskRecord) -> None: ...
-
-    async def get(self, task_id: str) -> TaskRecord | None: ...
-
-    async def list_active(self) -> list[TaskRecord]: ...

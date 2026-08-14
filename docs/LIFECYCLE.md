@@ -142,7 +142,7 @@ on_load → load_plugin()（lifecycle.py:43-153）
 ═══════════════════════════════════════════════════════════════
  1. TaskStore 初始化（sqlite, tasks.db）          lifecycle.py:51-52
  2. ToolRegistry + PermissionResolver             lifecycle.py:56-57
- 2.5 LoopbackTransport + TaskCommandBus           lifecycle.py:65-66
+ 2.5 TaskCommandBus（进程内命令路由 + 事件队列）   lifecycle.py:65
  3. TaskScheduler（executor 闭包打破循环依赖）     lifecycle.py:81-86
  4. PromptManager + PromptService（7 builders）   lifecycle.py:89-93
  5. TaskManager 构造 + setup()                    lifecycle.py:96-110
@@ -225,15 +225,15 @@ PENDING 入队 → 并发额度空余 → RUNNING
 
 ### ask_user 挂起 / 恢复
 
-`_handle_ask_user()`（`executor/agent_loop.py:170-223`）实现 RUNNING → WAITING_INPUT → RUNNING：
+`_handle_ask_user()`（`executor/agent_loop.py` 的 `_handle_ask_user`）实现 RUNNING → WAITING_INPUT → RUNNING：
 
 1. 创建 `asyncio.Event` 并登记到 `_resume_events`（存实例属性而非 metadata，Event 不可 JSON 序列化）
 2. `transition(WAITING_INPUT)` + save
-3. 发布 `WAITING_INPUT` 事件（`executor/agent_loop.py:188-194`）
-4. 订阅本 task_id 的 `RESUME_REPLY` 命令
-5. 调 `on_ask` 回调向用户发问；无回调则直接 set 事件避免无限挂起（`executor/agent_loop.py:205-208`）
-6. `await resume_event.wait()`（`executor/agent_loop.py:213`）阻塞等待
-7. 收到回复后转回 RUNNING，从 `metadata["_user_reply"]` 读取回复
+3. 调 `on_ask` 回调向用户发问；无回调则直接 set 事件避免无限挂起
+4. `await resume_event.wait()` 阻塞等待
+5. 收到回复后转回 RUNNING，从 `metadata["_user_reply"]` 读取回复
+
+唤醒不依赖事件广播：用户回复经 Hook → `TaskControl.handle_user_reply` → `bus.send(RESUME_REPLY)`，由主订阅 `_on_bus_command` 处理（v0.1.0 的 `WAITING_INPUT` 事件与 ask_user 临时订阅已移除）。
 
 ### 指令注入与总线命令
 

@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any
 from maibot_sdk import CONFIG_RELOAD_SCOPE_SELF
 
 from .api_expose import build_api_handlers
-from .bus import LoopbackTransport, TaskCommandBus
+from .bus import TaskCommandBus
 from .core.scheduler import TaskScheduler
 from .core.task_manager import TaskManager
 from .domain.task_record import TaskLevel, TaskRecord
@@ -62,8 +62,7 @@ async def load_plugin(plugin: "MaibotAgentPlugin") -> None:
     )
 
     # 2.5. 初始化命令总线（注入 / 唤醒 / 事件通道）
-    plugin._transport = LoopbackTransport()
-    plugin._command_bus = TaskCommandBus(plugin._transport)
+    plugin._command_bus = TaskCommandBus()
     logger.info("TaskCommandBus 初始化完成")
 
     # 3. 初始化 TaskScheduler（executor 闭包打破 TaskManager 循环依赖）

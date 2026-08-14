@@ -49,7 +49,6 @@ from oh_mai_agent.prompt.service import PromptService
 from oh_mai_agent.prompt.builders import ALL_BUILDERS
 from oh_mai_agent.tools.registry import ToolDefinition, ToolRegistry
 from oh_mai_agent.bus.command_bus import TaskCommandBus
-from oh_mai_agent.bus.transport import LoopbackTransport
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -341,7 +340,7 @@ def mock_ctx() -> MockCtx:
 
 @pytest.fixture
 def command_bus() -> TaskCommandBus:
-    return TaskCommandBus(LoopbackTransport())
+    return TaskCommandBus()
 
 
 @pytest.fixture

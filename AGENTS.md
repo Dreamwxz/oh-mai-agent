@@ -18,9 +18,9 @@ Essential 层仅 `ask_user`（始终可见）；Discoverable 层按需发现，A
 11 个 @Tool 安全子集（`tools/planner/` handler 工厂 + `plugin.py` 注册）。
 
 **命令总线与调度链**。任务执行需要跨组件协作（注入指令、唤醒、取消、暂停），故有
-TaskCommandBus（`bus/command_bus.py`），经 LoopbackTransport（`bus/transport.py`，进程内
-唯一实现）路由命令 INJECT_INSTRUCTION / RESUME_REPLY / CANCEL / PAUSE / RESUME 与事件
-WAITING_INPUT / COMPLETED / FAILED / CANCELLED。调度链：TaskManager（门面）→ TaskCrud /
+TaskCommandBus（`bus/command_bus.py`，进程内命令路由表 + 事件队列，无传输/序列化层）
+路由命令 INJECT_INSTRUCTION / RESUME_REPLY / CANCEL / PAUSE / RESUME 与事件
+COMPLETED / FAILED / CANCELLED。调度链：TaskManager（门面）→ TaskCrud /
 TaskControl（`core/usecases/`）→ ExecutorFactory → InstantExecutor（进程内同步）/ AgentExecutor
 （AgentLoop 最大 30 轮，经 `ctx.llm.generate_with_tools(model=planner, timeout_ms=240000)`
 调用 LLM）。主 Agent 还可经 `ask_subagent` / `ask_subagents` 工具派发进程内子 Agent
@@ -54,14 +54,14 @@ agent_system / title / polish / planner_board / injection / context_note / subag
 |---|---|
 | [README.md](README.md) | 用户入口：安装 / 配置速查 / 命令用法 / 功能索引 |
 | [docs/](docs/) | LIFECYCLE 生命周期总览 + features/（15 份功能文档）+ history/（4 份归档） |
-| [tests/](tests/) | 测试：56 文件 1020 个测试函数，pytest 验证 0 失败（3 个 mcp_stdio 环境相关失败除外）+ 文档引用检查（test_doc_links.py） |
+| [tests/](tests/) | 测试：56 文件 1021 个测试函数，pytest 验证 0 失败（3 个 mcp_stdio 环境相关失败除外）+ 文档引用检查（test_doc_links.py） |
 
 **目录结构**（散文式，不用多级缩进树）：
 
 - 根目录单文件模块：`plugin.py`（入口，注册 11 个 @Tool / 7 @Command）、`config.py`（10 节配置）、
   `permission.py`、`api_expose.py`、`planner_hooks.py`、`commands.py`、`lifecycle.py`
   （唯一组装点，load_plugin 编排全部依赖）、`_manifest.json`
-- `bus/`：命令总线，消息 + LoopbackTransport（唯一实现）+ TaskCommandBus 路由
+- `bus/`：命令总线，消息类型（`bus/messages.py` 纯 dataclass）+ TaskCommandBus 路由（命令路由表 + 事件队列）
 - `core/`：编排层（TaskScheduler / TaskManager 门面 + core/usecases/ 下沉 TaskControl 与
   TaskCrud）
 - `domain/`：领域模型与持久化，TaskRecord 状态机 + TaskStore + Recovery + StatusFormatter
@@ -69,7 +69,7 @@ agent_system / title / polish / planner_board / injection / context_note / subag
 - `tools/mcp/`：MCP 工具提供方，MCPConnection（stdio/http/sse）+ MCPManager + presets（内置 fetch/exa 预设）
 - `prompt/`：提示词系统，manager / service / base + builders/（7）+ templates/（7 中文模板）
 - `tools/`：工具系统三通道（agent 循环工具（含子 Agent 工具 `subagent_tool.py`）/ planner @Tool 工厂 / synthetic 发现工具）+ 发送工具共用实现 `tools/send_message.py` + MCP 工具提供方（tools/mcp/）
-- `tests/`：测试（56 文件，1020 测试函数，0 失败，mcp_stdio 3 个用例受环境限制）+ 文档引用检查（test_doc_links.py）
+- `tests/`：测试（56 文件，1021 测试函数，0 失败，mcp_stdio 3 个用例受环境限制）+ 文档引用检查（test_doc_links.py）
 - `docs/` + `data/`：功能文档（15 + LIFECYCLE + 4 归档）与运行时数据（gitignored）
 
 > 依赖方向：root（plugin.py/lifecycle.py 组装根）→ core（编排）→ executor（执行）→ {tools, prompt, bus} → domain
@@ -123,7 +123,7 @@ agent_system / title / polish / planner_board / injection / context_note / subag
 uv run --with maibot-plugin-sdk pytest tests/ -q
 ```
 
-共 1020 个测试函数，pytest 验证 0 失败（mcp_stdio 3 个用例需可启动 MCP stdio 子进程，本环境不可用）。conftest 将项目根挂载为 `oh_mai_agent` 包。
+共 1021 个测试函数，pytest 验证 0 失败（mcp_stdio 3 个用例需可启动 MCP stdio 子进程，本环境不可用）。conftest 将项目根挂载为 `oh_mai_agent` 包。
 约定：mock LLM 和 transport，**不 mock 持久化**（使用 real_store 即真 sqlite）。
 
 **Lint / 类型检查**。项目未配置形式化 lint 或类型检查工具（`pyproject.toml` 中无

@@ -98,6 +98,6 @@ RUNNING 降级走 `force` 而非 `transition`，因为 RUNNING→PENDING 不在�
 
 - [任务模型](./01-task-model.md) — TaskRecord 数据模型与 8 态状态机
 - [调度器](./02-scheduler.md) — 入队落盘、超时守卫保存、卸载 PAUSED
-- [命令总线](./11-command-bus.md) — RESUME_REPLY / CANCEL 等命令与 WAITING_INPUT 事件
+- [命令总线](./11-command-bus.md) — RESUME_REPLY / CANCEL 等命令与终态事件
 - [生命周期总览](../LIFECYCLE.md) — 插件 on_load / on_unload 全流程
 - [配置体系](./14-config.md) — persist_history 等配置项说明

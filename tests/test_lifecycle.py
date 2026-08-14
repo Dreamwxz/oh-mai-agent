@@ -28,7 +28,6 @@ from conftest import MockCtx, make_task
 from maibot_sdk import CONFIG_RELOAD_SCOPE_SELF
 
 from oh_mai_agent.bus.command_bus import TaskCommandBus
-from oh_mai_agent.bus.transport import LoopbackTransport
 from oh_mai_agent.config import MaibotAgentConfig, MCPConfig, TaskConfig
 from oh_mai_agent.core.scheduler import TaskScheduler
 from oh_mai_agent.core.task_manager import TaskManager
@@ -101,7 +100,6 @@ class TestLoadPlugin:
         assert isinstance(p._resolver, PermissionResolver)
 
         # 2. 命令总线
-        assert isinstance(p._transport, LoopbackTransport)
         assert isinstance(p._command_bus, TaskCommandBus)
 
         # 3. 调度器已启动

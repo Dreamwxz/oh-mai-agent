@@ -1,190 +1,31 @@
-"""oh_mai_agent.bus 的测试——消息、transport、命令总线。"""
+"""oh_mai_agent.bus 的测试——命令路由、事件队列、订阅生命周期与韧性。
+
+v0.1.0 跨进程方案回退后，总线不再有字节帧序列化 / Transport / decode_frame，
+因此不再测试线协议，只测试进程内真正有价值的行为：
+- 命令按 task_id 精准投递（同步分发）；
+- 事件经内部队列 fan-out（fire-and-forget，不按路由表分发）；
+- 订阅生命周期（subscribe / unsubscribe）；
+- 处理器异常韧性（log-and-continue，不得杀死调度基础设施）。
+"""
 
 from __future__ import annotations
 
 import asyncio
-import json
 
 import pytest
 
 from oh_mai_agent.bus import (
     CommandKind,
     EventKind,
-    LoopbackTransport,
     TaskCommand,
     TaskCommandBus,
     TaskEvent,
 )
-from oh_mai_agent.bus.messages import decode_frame
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# 测试辅助
-# ═══════════════════════════════════════════════════════════════════════
-
-
-def _json_dumps(value: object) -> str:
-    return json.dumps(value, default=str)
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# 消息 — 往返
-# ═══════════════════════════════════════════════════════════════════════
-
-
-class TestTaskCommandRoundtrip:
-    """给定 TaskCommand，经 to_dict 再 from_dict 后，
-    结果与原始对象一致（type、task_id、kind、payload）。"""
-
-    def test_roundtrip_inject_instruction(self) -> None:
-        cmd = TaskCommand(
-            task_id="task-001",
-            kind=CommandKind.INJECT_INSTRUCTION,
-            payload={"instruction": "stop immediately"},
-        )
-        data = cmd.to_dict()
-
-        # 必须是合法的 JSON
-        raw = _json_dumps(data)
-        parsed = json.loads(raw)
-        assert parsed["type"] == "command"
-        assert parsed["task_id"] == "task-001"
-
-        # 往返还原
-        restored = TaskCommand.from_dict(data)
-        assert restored.task_id == cmd.task_id
-        assert restored.kind == cmd.kind
-        assert restored.payload == cmd.payload
-
-    def test_roundtrip_cancel(self) -> None:
-        cmd = TaskCommand(task_id="t2", kind=CommandKind.CANCEL)
-        restored = TaskCommand.from_dict(cmd.to_dict())
-        assert restored.task_id == "t2"
-        assert restored.kind == CommandKind.CANCEL
-        assert restored.payload == {}
-
-    def test_roundtrip_all_command_kinds(self) -> None:
-        for kind in CommandKind:
-            cmd = TaskCommand(task_id="t", kind=kind, payload={"x": 1})
-            restored = TaskCommand.from_dict(cmd.to_dict())
-            assert restored.kind == kind
-
-
-class TestTaskEventRoundtrip:
-    def test_roundtrip_completed(self) -> None:
-        evt = TaskEvent(
-            task_id="task-001",
-            kind=EventKind.COMPLETED,
-            payload={"result": "done"},
-        )
-        data = evt.to_dict()
-        raw = _json_dumps(data)
-        parsed = json.loads(raw)
-        assert parsed["type"] == "event"
-
-        restored = TaskEvent.from_dict(data)
-        assert restored.task_id == evt.task_id
-        assert restored.kind == evt.kind
-        assert restored.payload == evt.payload
-
-    def test_roundtrip_all_event_kinds(self) -> None:
-        for kind in EventKind:
-            evt = TaskEvent(task_id="t", kind=kind)
-            restored = TaskEvent.from_dict(evt.to_dict())
-            assert restored.kind == kind
-
-
-class TestDecodeFrame:
-    """给定原始 frame 字节，调用 decode_frame 后，
-    返回正确类型的消息。"""
-
-    def test_decode_command_frame(self) -> None:
-        cmd = TaskCommand(task_id="t1", kind=CommandKind.INJECT_INSTRUCTION)
-        frame = _json_dumps(cmd.to_dict()).encode()
-        result = decode_frame(frame)
-        assert isinstance(result, TaskCommand)
-        assert result.task_id == "t1"
-
-    def test_decode_event_frame(self) -> None:
-        evt = TaskEvent(task_id="t1", kind=EventKind.COMPLETED)
-        frame = _json_dumps(evt.to_dict()).encode()
-        result = decode_frame(frame)
-        assert isinstance(result, TaskEvent)
-        assert result.task_id == "t1"
-
-    def test_decode_unknown_type_raises(self) -> None:
-        frame = b'{"type":"bogus","task_id":"t1"}'
-        with pytest.raises(ValueError, match="Unknown message type"):
-            decode_frame(frame)
-
-    def test_decode_missing_type_raises(self) -> None:
-        frame = b'{"task_id":"t1"}'
-        with pytest.raises(ValueError, match="Unknown message type"):
-            decode_frame(frame)
-
-    def test_decode_non_json_raises(self) -> None:
-        with pytest.raises((json.JSONDecodeError, UnicodeDecodeError)):
-            decode_frame(b"not-json!!!!")
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# 传输层 — LoopbackTransport
-# ═══════════════════════════════════════════════════════════════════════
-
-
-class TestLoopbackTransport:
-    """给定 LoopbackTransport，先 send 再 receive，
-    返回相同的字节；close 之后 receive 返回 None。"""
-
-    @pytest.mark.asyncio
-    async def test_send_receive_single_frame(self) -> None:
-        t = LoopbackTransport()
-        await t.send(b"hello-world")
-        result = await t.receive()
-        assert result == b"hello-world"
-
-    @pytest.mark.asyncio
-    async def test_send_receive_multiple_frames(self) -> None:
-        t = LoopbackTransport()
-        await t.send(b"frame-1")
-        await t.send(b"frame-2")
-        await t.send(b"frame-3")
-        assert await t.receive() == b"frame-1"
-        assert await t.receive() == b"frame-2"
-        assert await t.receive() == b"frame-3"
-
-    @pytest.mark.asyncio
-    async def test_close_sends_none_sentinel(self) -> None:
-        t = LoopbackTransport()
-        await t.close()
-        result = await t.receive()
-        assert result is None
-
-    @pytest.mark.asyncio
-    async def test_send_after_close_is_noop(self) -> None:
-        t = LoopbackTransport()
-        await t.close()
-        await t.send(b"should-not-appear")
-        # close() 已入队哨兵 None，先消费掉它。
-        assert await t.receive() is None
-        # 关闭并消费哨兵后，receive 立即返回 None，
-        # 因为已关闭且队列为空。
-        assert await t.receive() is None
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# TaskCommandBus 命令总线
-# ═══════════════════════════════════════════════════════════════════════
 
 
 @pytest.fixture
-def transport() -> LoopbackTransport:
-    return LoopbackTransport()
-
-
-@pytest.fixture
-def bus(transport: LoopbackTransport) -> TaskCommandBus:
-    return TaskCommandBus(transport)
+def bus() -> TaskCommandBus:
+    return TaskCommandBus()
 
 
 class TestTaskCommandBusSend:
@@ -192,9 +33,7 @@ class TestTaskCommandBusSend:
     handler 会收到该命令。"""
 
     @pytest.mark.asyncio
-    async def test_subscriber_receives_command(
-        self, bus: TaskCommandBus,
-    ) -> None:
+    async def test_subscriber_receives_command(self, bus: TaskCommandBus) -> None:
         received: list[TaskCommand] = []
 
         async def handler(cmd: TaskCommand) -> None:
@@ -214,20 +53,7 @@ class TestTaskCommandBusSend:
         assert received[0].payload == {"instruction": "reset"}
 
     @pytest.mark.asyncio
-    async def test_send_writes_to_transport(
-        self, bus: TaskCommandBus, transport: LoopbackTransport,
-    ) -> None:
-        cmd = TaskCommand(task_id="t", kind=CommandKind.CANCEL)
-        await bus.send(cmd)
-        frame = await transport.receive()
-        data = json.loads(frame)
-        assert data["type"] == "command"
-        assert data["kind"] == "cancel"
-
-    @pytest.mark.asyncio
-    async def test_unsubscribed_task_id_no_crash(
-        self, bus: TaskCommandBus,
-    ) -> None:
+    async def test_unsubscribed_task_id_no_crash(self, bus: TaskCommandBus) -> None:
         """向未订阅的 task_id 发送命令不会抛异常。"""
         cmd = TaskCommand(task_id="no-subscriber", kind=CommandKind.PAUSE)
         ok = await bus.send(cmd)
@@ -252,22 +78,7 @@ class TestTaskCommandBusSend:
 
 
 class TestTaskCommandBusPublish:
-    """给定 TaskCommandBus，调用 publish 时事件 frame 会写入
-    transport，但不会分发给订阅者。"""
-
-    @pytest.mark.asyncio
-    async def test_publish_writes_to_transport(
-        self, bus: TaskCommandBus, transport: LoopbackTransport,
-    ) -> None:
-        evt = TaskEvent(task_id="t1", kind=EventKind.FAILED, payload={"reason": "timeout"})
-        await bus.publish(evt)
-
-        frame = await transport.receive()
-        data = json.loads(frame)
-        assert data["type"] == "event"
-        assert data["task_id"] == "t1"
-        assert data["kind"] == "failed"
-        assert data["payload"] == {"reason": "timeout"}
+    """事件不按路由表分发；经内部事件队列由 listen_events 消费。"""
 
     @pytest.mark.asyncio
     async def test_publish_does_not_dispatch_to_subscribers(
@@ -282,6 +93,28 @@ class TestTaskCommandBusPublish:
         bus.subscribe("t1", handler)
         await bus.publish(TaskEvent(task_id="t1", kind=EventKind.COMPLETED))
         assert not called
+
+    @pytest.mark.asyncio
+    async def test_listen_events_receives_published_event(
+        self, bus: TaskCommandBus,
+    ) -> None:
+        received: list[TaskEvent] = []
+
+        async def handler(event: TaskEvent) -> None:
+            received.append(event)
+
+        listener = asyncio.create_task(bus.listen_events(handler))
+        await bus.publish(TaskEvent(task_id="t1", kind=EventKind.COMPLETED))
+        await bus.publish(TaskEvent(task_id="t2", kind=EventKind.FAILED))
+        await asyncio.sleep(0.05)
+        listener.cancel()
+        try:
+            await listener
+        except asyncio.CancelledError:
+            pass
+
+        assert [e.task_id for e in received] == ["t1", "t2"]
+        assert [e.kind for e in received] == [EventKind.COMPLETED, EventKind.FAILED]
 
 
 class TestTaskCommandBusHelpers:
@@ -303,41 +136,8 @@ class TestTaskCommandBusHelpers:
         assert len(received) == 0
 
 
-# ═══════════════════════════════════════════════════════════════════════
-# JSON 可序列化
-# ═══════════════════════════════════════════════════════════════════════
-
-
-class TestJsonSerializability:
-    """所有消息类型都能在不使用自定义 encoder 的情况下通过 ``json.dumps``。"""
-
-    def test_command_is_fully_json_serializable(self) -> None:
-        cmd = TaskCommand(
-            task_id="t",
-            kind=CommandKind.RESUME_REPLY,
-            payload={"reply": "yes"},
-        )
-        raw = json.dumps(cmd.to_dict())
-        parsed = json.loads(raw)
-        assert isinstance(parsed["ts"], str)  # datetime → ISO 字符串
-
-    def test_event_is_fully_json_serializable(self) -> None:
-        evt = TaskEvent(
-            task_id="t",
-            kind=EventKind.WAITING_INPUT,
-            payload={"since": "2025-01-01T00:00:00Z"},
-        )
-        raw = json.dumps(evt.to_dict())
-        parsed = json.loads(raw)
-        assert isinstance(parsed["ts"], str)
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# 处理器异常韧性（F2 B5）：单个处理器异常不得杀死调度基础设施
-# ═══════════════════════════════════════════════════════════════════════════════
-
 class TestBusHandlerResilience:
-    """bus 分发循环必须 log-and-continue：send / listen_events
+    """bus 分发必须 log-and-continue：send / listen_events
     不得因单个处理器异常而终止（否则调度器检查循环 / 事件监听
     永久死亡 → 并发额度泄漏 → 任务全部排队）。"""
 
@@ -397,93 +197,3 @@ class TestBusHandlerResilience:
 
         # 第一个事件触发异常，第二个事件仍被处理 → 监听循环未死
         assert [e.task_id for e in received] == ["t2"]
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# 消息解析辅助（_ensure_utc / _parse_datetime / _coerce_payload / 缺省 kind）
-# ═══════════════════════════════════════════════════════════════════════
-
-class TestMessageParseHelpers:
-    def test_ensure_utc_none_uses_current_utc(self) -> None:
-        from datetime import datetime, timezone
-
-        from oh_mai_agent.bus.messages import _ensure_utc
-
-        dt = _ensure_utc(None)
-        assert dt.tzinfo is not None
-        assert dt.tzinfo is timezone.utc
-        assert abs((datetime.now(timezone.utc) - dt).total_seconds()) < 5
-
-    def test_ensure_utc_naive_assumed_utc(self) -> None:
-        from datetime import datetime, timezone
-
-        from oh_mai_agent.bus.messages import _ensure_utc
-
-        naive = datetime(2025, 1, 1, 12, 0, 0)
-        dt = _ensure_utc(naive)
-        assert dt.tzinfo is timezone.utc
-        assert dt.hour == 12  # 不换算，仅标记 UTC
-
-    def test_ensure_utc_aware_converted(self) -> None:
-        from datetime import datetime, timedelta, timezone
-
-        from oh_mai_agent.bus.messages import _ensure_utc
-
-        aware = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone(timedelta(hours=8)))
-        dt = _ensure_utc(aware)
-        assert dt.tzinfo is timezone.utc
-        assert dt.hour == 4  # +8 时区 → UTC 减 8 小时
-
-    def test_parse_datetime_none(self) -> None:
-        from oh_mai_agent.bus.messages import _parse_datetime
-
-        assert _parse_datetime(None) is None
-
-    def test_parse_datetime_passthrough(self) -> None:
-        from datetime import datetime
-
-        from oh_mai_agent.bus.messages import _parse_datetime
-
-        dt = datetime(2025, 1, 1)
-        assert _parse_datetime(dt) is dt
-
-    def test_parse_datetime_iso_string(self) -> None:
-        from datetime import datetime
-
-        from oh_mai_agent.bus.messages import _parse_datetime
-
-        dt = _parse_datetime("2025-01-01T12:00:00")
-        assert dt is not None
-        assert dt.year == 2025
-        assert dt.tzinfo is not None  # naive 字符串自动标记 UTC
-
-    def test_parse_datetime_invalid_returns_none(self) -> None:
-        from oh_mai_agent.bus.messages import _parse_datetime
-
-        assert _parse_datetime("not-a-date") is None
-        assert _parse_datetime(12345) is None
-
-    def test_coerce_payload_dict_passthrough(self) -> None:
-        from oh_mai_agent.bus.messages import _coerce_payload
-
-        payload = {"a": 1}
-        assert _coerce_payload(payload) is payload
-
-    def test_coerce_payload_non_dict_falls_back_empty(self) -> None:
-        from oh_mai_agent.bus.messages import _coerce_payload
-
-        assert _coerce_payload("junk") == {}
-        assert _coerce_payload(None) == {}
-        assert _coerce_payload([1, 2]) == {}
-
-    def test_command_from_dict_missing_kind_defaults_inject(self) -> None:
-        from oh_mai_agent.bus.messages import TaskCommand
-
-        cmd = TaskCommand.from_dict({"task_id": "t1"})
-        assert cmd.kind == CommandKind.INJECT_INSTRUCTION
-
-    def test_event_from_dict_missing_kind_defaults_completed(self) -> None:
-        from oh_mai_agent.bus.messages import TaskEvent
-
-        event = TaskEvent.from_dict({"task_id": "t1"})
-        assert event.kind == EventKind.COMPLETED

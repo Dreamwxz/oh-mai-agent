@@ -1,37 +1,25 @@
-"""任务命令总线 — 命令/事件消息系统。
-
-提供进程内通信抽象。DB 是唯一共享状态，命令和事件通过消息总线传递。
+"""任务命令总线 — 进程内命令路由与事件广播。
 
 提供：
   - ``CommandKind`` / ``EventKind`` — 消息类型枚举
-  - ``TaskCommand`` / ``TaskEvent`` — JSON 可序列化 dataclass
-  - ``Transport`` — 异步传输协议（抽象基类）
-  - ``LoopbackTransport`` — 进程内传输实现（基于 ``asyncio.Queue``）
-  - ``TaskCommandBus`` — 命令发送 / 事件发布 / 处理器订阅
+  - ``TaskCommand`` / ``TaskEvent`` — 消息数据类（纯数据，无序列化）
+  - ``TaskCommandBus`` — 命令按 task_id 精准路由 + 事件队列广播
 """
 
 from __future__ import annotations
 
+from .command_bus import TaskCommandBus
 from .messages import (
     CommandKind,
     EventKind,
     TaskCommand,
     TaskEvent,
 )
-from .transport import (
-    LoopbackTransport,
-    Transport,
-)
-from .command_bus import (
-    TaskCommandBus,
-)
 
 __all__ = [
     "CommandKind",
     "EventKind",
-    "LoopbackTransport",
     "TaskCommand",
     "TaskCommandBus",
     "TaskEvent",
-    "Transport",
 ]

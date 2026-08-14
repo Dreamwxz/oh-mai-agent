@@ -28,9 +28,8 @@ Agent 自主执行并非总是「一条路走到黑」。长时任务常常在�
 Agent 调用 ask_user
    │
    ▼
-_handle_ask_user（agent_loop.py:170-223）
+_handle_ask_user（executor/agent_loop.py 的 _handle_ask_user）
    建 resume_event → transition(WAITING_INPUT) + save
-   → publish(WAITING_INPUT 事件) → subscribe RESUME_REPLY
    → on_ask 发问 → await resume_event.wait()  ← 挂起
    │
    ▼
@@ -51,19 +50,19 @@ _handle_ask_user 恢复：transition(RUNNING) → 返回 reply 给 Agent
 
 ### 挂起：先登记再等待，保证任何时刻都能被唤醒
 
-挂起逻辑集中在 `AgentLoop._handle_ask_user()`（`executor/agent_loop.py:170-223`），顺序是刻意的：
+挂起逻辑集中在 `AgentLoop._handle_ask_user()`（`executor/agent_loop.py` 的 `_handle_ask_user`），顺序是刻意的：
 
-1. **先建恢复信号**：创建 `asyncio.Event` 并登记到 `_resume_events[task.id]`（`agent_loop.py:183-184`）。这个 Event 是进程内对象，只存实例属性，不落库。
-2. **再改状态**：`task.transition(WAITING_INPUT)` 并 save 落盘（`agent_loop.py:185-186`），保证重启后任务恢复为 WAITING_INPUT 而非 RUNNING。
-3. **发布事件**：通过命令总线 publish `TaskEvent(WAITING_INPUT)`（`agent_loop.py:188-194`），让调度器等订阅方感知任务进入等待。
-4. **订阅恢复命令**：subscribe 本 task_id 的 `RESUME_REPLY` 命令（`agent_loop.py:196-200`）。
-5. **发问**：调用 `on_ask(stream_id, question)` 回调把问题发送到聊天流（`agent_loop.py:203-204`）。
-6. **阻塞等待**：`await resume_event.wait()`（`agent_loop.py:213`）无限期挂起，直到收到恢复信号。
-7. **恢复**：收到信号后 `transition(RUNNING)` 并 save（`agent_loop.py:219-220`），从 `metadata` 弹出 `_user_reply` 作为工具返回值交给 Agent（`agent_loop.py:222-223`）。
+1. **先建恢复信号**：创建 `asyncio.Event` 并登记到 `_resume_events[task.id]`。这个 Event 是进程内对象，只存实例属性，不落库。
+2. **再改状态**：`task.transition(WAITING_INPUT)` 并 save 落盘，保证重启后任务恢复为 WAITING_INPUT 而非 RUNNING。
+3. **发问**：调用 `on_ask(stream_id, question)` 回调把问题发送到聊天流。
+4. **阻塞等待**：`await resume_event.wait()` 无限期挂起，直到收到恢复信号。
+5. **恢复**：收到信号后 `transition(RUNNING)` 并 save，从 `metadata` 弹出 `_user_reply` 作为工具返回值交给 Agent。
+
+唤醒不依赖事件广播：用户回复经 Hook → `TaskControl.handle_user_reply` → `bus.send(RESUME_REPLY)`，由主订阅 `_on_bus_command` 的 RESUME_REPLY 分支写 `_user_reply` 并 set 恢复事件（v0.1.0 的 `WAITING_INPUT` 事件与 ask_user 临时订阅 `_on_resume_reply` 已移除）。
 
 「先登记 Event、再改状态、后发问」的顺序保证挂起流程任意时刻都具备恢复能力：即使问题发送失败，Event 已经存在，用户回复或取消命令依然能唤醒任务。
 
-**无 on_ask 回调的兜底**：如果 AgentLoop 初始化时未注入 `on_ask` 回调（`agent_loop.py:205-208`），直接 `resume_event.set()` 恢复任务并返回错误，避免任务因无人提问而永久挂死。
+**无 on_ask 回调的兜底**：如果 AgentLoop 初始化时未注入 `on_ask` 回调，直接 `resume_event.set()` 恢复任务并返回错误，避免任务因无人提问而永久挂死。
 
 ### 回复链路：一次回复，精确唤醒一个任务
 
@@ -93,7 +92,7 @@ v0.1.0 回退子进程架构时，回复匹配与唤醒逻辑随执行控制一�
 
 ### 挂起中的任务如何结束
 
-WAITING_INPUT 不是终态，任务可以经两条路径离开挂起：收到匹配回复后恢复 RUNNING 继续执行；或被 `/task cancel` 取消。取消经命令总线发送 CANCEL，AgentLoop 置 `_cancelled` 并 set 恢复事件（`executor/agent_loop.py:280-284`），`_handle_ask_user` 的 `wait()` 随即返回并上报 cancelled。
+WAITING_INPUT 不是终态，任务可以经两条路径离开挂起：收到匹配回复后恢复 RUNNING 继续执行；或被 `/task cancel` 取消。取消经命令总线发送 CANCEL，AgentLoop 置 `_cancelled` 并 set 恢复事件（`executor/agent_loop.py` 的 `_on_bus_command` CANCEL 分支），`_handle_ask_user` 的 `wait()` 随即返回并上报 cancelled。
 
 ### 插件重启后的恢复
 
@@ -107,7 +106,7 @@ WAITING_INPUT **永不超时**。`config.py` 的 `default_timeout_min`（`config
 
 - [01-任务模型](./01-task-model.md)：WAITING_INPUT 状态在状态机中的位置与合法转换
 - [05-工具系统](./05-tools.md)：essential / discoverable 两级工具呈现
-- [11-命令总线](./11-command-bus.md)：RESUME_REPLY 命令与 WAITING_INPUT 事件的传输机制
+- [11-命令总线](./11-command-bus.md)：RESUME_REPLY 命令的唤醒链路
 - [12-提示词系统](./12-prompt.md)：Agent 系统提示词如何引导提问行为
 
 ### 已知限制

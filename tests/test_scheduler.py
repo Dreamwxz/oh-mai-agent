@@ -1028,8 +1028,10 @@ class TestSchedulerErrorPaths:
         self, store: TaskStore, task_config: TaskConfig, command_bus: Any,
     ) -> None:
         scheduler = TaskScheduler(task_config, store, _noop_executor, command_bus=command_bus)
-        event = TaskEvent(task_id="t1", kind=EventKind.WAITING_INPUT)
-        await scheduler._on_task_event(event)  # 非终态事件不释放额度
+        # WAITING_INPUT 事件已移除（零消费者）；kind 过滤仍作为防御性守卫保留，
+        # 用原始字符串模拟未知事件类型，验证不会误释放额度。
+        event = TaskEvent(task_id="t1", kind="unknown_kind")  # type: ignore[arg-type]
+        await scheduler._on_task_event(event)  # 未知事件不释放额度
 
     @pytest.mark.asyncio
     async def test_event_listener_tolerates_missing_task(
