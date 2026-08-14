@@ -26,7 +26,7 @@
 
 ## 设计方案
 
-**回复的完整链路**。agent 任务完成后，AgentExecutor 的 `send_final` 回调默认就是 `TaskControl._dispatch_reply_instant()`（core/usecases/task_control.py:49-72）：把回复文本拆成一个新的 INSTANT reply 任务（`stream_id=task.reply_target`、`metadata["_is_reply"]=True`）落库并交给调度器入队。调度器通过 `enqueue` 将任务加入 PENDING 队列，随后 `_try_dispatch` 检查并发额度，额度可用时 `transition(RUNNING)` 并 `create_task(InstantExecutor.execute(...))`。回复任务不经过 AgentLoop，不占用 agent 并发额度，走的是独立的 instant 执行通道。
+**回复的完整链路**。agent 任务完成后，AgentExecutor 的 `send_final` 回调默认就是 `TaskControl._dispatch_reply_instant()`（core/usecases/task_control.py:49-72）：把回复文本拆成一个新的 INSTANT reply 任务（`stream_id=task.reply_target`、经 `mark_as_reply()` 打标记，键 `META_IS_REPLY`）落库并交给调度器入队。调度器通过 `enqueue` 将任务加入 PENDING 队列，随后 `_try_dispatch` 检查并发额度，额度可用时 `transition(RUNNING)` 并 `create_task(InstantExecutor.execute(...))`。回复任务不经过 AgentLoop，不占用 agent 并发额度，走的是独立的 instant 执行通道。
 
 `InstantExecutor.execute()`（executor/instant.py:528-627）是整个回复路径的终点：先 `send_final_reply` 润色分割发送，再判终态收尾。整个执行路径不跨进程，上下文经 `executor/context.py` 的 `current_task` ContextVar 传递。执行结果（COMPLETED / FAILED）通过 `scheduler.on_task_completed()` 回调通知调度器释放额度，不经过命令总线的事件分发——instant 任务没有 AgentLoop 那样的事件监听循环，终态通知是直调的。
 
@@ -53,7 +53,7 @@
 **发送成功后的上下文记录**。发送成功后立即向目标流写上下文记录，这一步由 `send_final_reply` 自身在每段 `ctx.send.text` 返回成功值后执行。写两条记录（多段时为每段一条纯文本记录 + 全部分段完成后一条 XML 注释），写入失败都不影响整体流程，只打 warning 日志：
 
 - **纯文本记录**：实际发送的润色后文本（每段一条），无 XML 标签，通过 `ctx.maisaka.context.append` 写入，`source_kind` 标记为 `plugin:oh-mai-agent:task-reply`。供后续 LLM 推理看到这条回复确实发出去了。
-- **XML 动机注释**：由 `_append_motivation_note()`（instant.py:596-627）对跨流回复（`task.reply_stream_id` 或 `metadata["_is_reply"]`）单独补写。用 `context_note` 模板渲染任务动机生成 XML 标签，写入目标流，让从别处发来的任务结果在聊天上下文里可追溯。迁移后该分支由父进程直接写：`execute()` 调用 `send_final_reply` 不再传 motivation，统一收口到 `_append_motivation_note`。判断条件是：只要 `reply_stream_id` 不为 None 或 `_is_reply` 为 True，就补写——这比单纯看 `reply_stream_id` 更宽，覆盖了通过 `_dispatch_reply_instant` 创建的回复任务。
+- **XML 动机注释**：由 `_append_motivation_note()`（instant.py:596-627）对跨流回复（`task.reply_stream_id` 或 `is_reply_task()`）单独补写。用 `context_note` 模板渲染任务动机生成 XML 标签，写入目标流，让从别处发来的任务结果在聊天上下文里可追溯。迁移后该分支由父进程直接写：`execute()` 调用 `send_final_reply` 不再传 motivation，统一收口到 `_append_motivation_note`。判断条件是：只要 `reply_stream_id` 不为 None 或 `is_reply_task()` 为 True，就补写——这比单纯看 `reply_stream_id` 更宽，覆盖了通过 `_dispatch_reply_instant` 创建的回复任务。
 
 **成功与失败的终态收尾**。发送成功后，`execute()` 重新 `store.get` 判终态（防并发终态覆盖），非终态才走 `complete_and_notify`（executor/base.py:114-118）：`transition(COMPLETED)`（竞争时 `force` 兜底）→ 落库 → `scheduler.on_task_completed()` 释放并发额度。异常路径走 `fail_task()`（instant.py:464-515）：先做双重终态守卫——本地 `is_terminal()` 直接返回，再重载持久化记录检查（防进程内快照过期）——随后可选 `send_message` 先发"任务执行失败"通知（失败通知本身发送失败也不影响状态更新，异常静默吞掉），再 `transition(FAILED)`、被状态机拒绝时 `force(FAILED)` 兜底，落盘并通知调度器。终态守卫的意义在于：任务可能已被调度器超时判 FAILED 或用户取消，执行器不能用一个过期的进程内快照覆盖并发终态。`fail_task` 的 `send_message` 可选特性也说明：失败通知不是必须的——`execute()` 异常路径总是 `send_message=True`，但其他调用方（如 AgentLoop 的异常处理）可以选择不发消息，只悄悄地标记 FAILED。
 

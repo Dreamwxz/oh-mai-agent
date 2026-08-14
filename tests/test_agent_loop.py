@@ -439,7 +439,7 @@ class TestAgentLoopBasic:
     async def test_cursor_watermark_updated(
         self, store: TaskStore, mock_ctx: MockCtx, registry: ToolRegistry, prompt_service: Any, command_bus: Any,
     ) -> None:
-        """每追加一轮快照都会推进 metadata['_last_history_id']，
+        """每追加一轮快照都会推进 last_history_id()，
         它记录了持久化水位线（审计 / 未来增量恢复的锚点）。"""
         event = asyncio.Event()
         task = make_task("t1", level=TaskLevel.AGENT, status=TaskStatus.PENDING)
@@ -461,7 +461,7 @@ class TestAgentLoopBasic:
 
         updated = await store.get("t1")
         assert updated is not None
-        cursor = updated.metadata.get("_last_history_id")
+        cursor = updated.last_history_id()
         assert isinstance(cursor, int) and cursor > 0
         # 每轮快照均已持久化；cursor 指向最新一条
         hist = await store.get_history("t1")
@@ -517,7 +517,7 @@ class TestAgentLoopAskUser:
             # 模拟用户回复：保存回复并恢复任务
             task = await store.get("t1")
             assert task is not None
-            task.metadata["_user_reply"] = "用户回复内容"
+            task.set_user_reply("用户回复内容")
             await store.save(task)
             await command_bus.send(TaskCommand(
                 task_id="t1", kind=CommandKind.RESUME_REPLY,
@@ -606,7 +606,7 @@ class TestAgentLoopAskUser:
             # 模拟用户回复：重新加载任务、保存回复、恢复任务
             fresh = await real_store.get("t1")
             assert fresh is not None
-            fresh.metadata["_user_reply"] = "yes"
+            fresh.set_user_reply("yes")
             await real_store.save(fresh)
             await command_bus.send(TaskCommand(
                 task_id="t1", kind=CommandKind.RESUME_REPLY,
@@ -649,7 +649,7 @@ class TestAgentLoopAskUser:
 
             task = await real_store.get("t1")
             assert task is not None
-            task.metadata["_user_reply"] = "用户回复内容"
+            task.set_user_reply("用户回复内容")
             await real_store.save(task)
             await command_bus.send(TaskCommand(
                 task_id="t1", kind=CommandKind.RESUME_REPLY,
@@ -775,7 +775,7 @@ class TestAgentLoopFailure:
         updated = await store.get("t1")
         assert updated is not None
         assert updated.status == TaskStatus.FAILED
-        assert "_error" in updated.metadata
+        assert updated.error() is not None
         assert task.status == TaskStatus.FAILED
 
 
@@ -1051,7 +1051,7 @@ class TestF2PauseFlagPreservation:
         self, store: TaskStore, mock_ctx: MockCtx, registry: ToolRegistry,
         prompt_service: Any, command_bus: Any,
     ) -> None:
-        """PAUSE 命令后，循环自有任务对象的 metadata 携带 _coop_paused，
+        """PAUSE 命令后，循环自有任务对象经 set_coop_paused 携带标记，
         后续整记录保存（save(task)）不会擦除该标记。"""
         task = make_task("pause-flag", level=TaskLevel.AGENT, status=TaskStatus.RUNNING)
         await store.save(task)
@@ -1070,7 +1070,7 @@ class TestF2PauseFlagPreservation:
 
         persisted = await store.get(task.id)
         assert persisted is not None
-        assert persisted.metadata.get("_coop_paused") is True
+        assert persisted.is_coop_paused()
 
 
 class TestF2StoreGuard:

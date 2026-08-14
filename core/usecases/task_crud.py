@@ -91,7 +91,7 @@ class TaskCrud:
         # 会话 UUID 等无法映射平台/用户形态时无法还原创建者权限（会回落 guest，
         # 导致 MCP 等 user+ 工具不可见）。planner / API 创建者均为 ADMIN，
         # 任务理应以创建者角色执行。
-        task.metadata["_caller_role"] = caller_role.value
+        task.set_caller_role(caller_role)
         await self._store.save(task)
         await self._scheduler.enqueue(task)
         logger.info(

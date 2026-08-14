@@ -6,7 +6,7 @@ import logging
 from collections.abc import Callable
 from contextvars import ContextVar
 
-from ..domain.task_record import TaskRecord
+from ..domain.task_record import META_CALLER_ROLE, TaskRecord
 from ..permission import PermissionResolver, Role
 
 logger = logging.getLogger(__name__)
@@ -25,19 +25,19 @@ def make_role_provider(
 ) -> Callable[[], Role]:
     """Create a role resolver callback for a task.
 
-    优先使用任务创建时持久化的 ``metadata["_caller_role"]``（``TaskCrud.create``
-    写入）：planner / API 创建者均为 ADMIN，任务以创建者角色执行，保证
-    MCP（user+）等工具对任务可见。无该元数据（历史任务 / 内部即时任务）时
-    回退到按 owner/stream_id 解析。
+    优先使用任务创建时持久化的创建者角色（``task.set_caller_role()``，键
+    ``META_CALLER_ROLE``，由 ``TaskCrud.create`` 写入）：planner / API 创建者
+    均为 ADMIN，任务以创建者角色执行，保证 MCP（user+）等工具对任务可见。
+    无该元数据（历史任务 / 内部即时任务）时回退到按 owner/stream_id 解析。
     """
-    caller_role = task.metadata.get("_caller_role")
+    caller_role = task.caller_role()
     if caller_role:
         try:
             resolved_caller_role = Role(caller_role)
         except ValueError:
             logger.warning(
-                "任务 %s：metadata 中非法 _caller_role=%r，回退 owner 解析",
-                task.id, caller_role,
+                "任务 %s：metadata[%s] 非法 %r，回退 owner 解析",
+                task.id, META_CALLER_ROLE, caller_role,
             )
         else:
             return lambda: resolved_caller_role

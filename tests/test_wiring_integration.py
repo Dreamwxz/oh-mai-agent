@@ -160,7 +160,7 @@ async def test_user_agent_wiring_preserves_user_tool_visibility(real_store: Task
 
 @pytest.mark.asyncio
 async def test_agent_wiring_runs_with_creator_role_and_direct_tools(real_store: TaskStore) -> None:
-    """任务以创建者角色执行（_caller_role 持久化），且工具全量直接暴露。
+    """任务以创建者角色执行（set_caller_role 持久化），且工具全量直接暴露。
 
     owner=qq:30001 解析为 guest，但创建者 caller_role=USER → 任务以 USER 执行，
     USER 可见工具（ask_user/send_message/read）全部直接暴露在 schema 中；

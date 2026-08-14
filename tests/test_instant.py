@@ -600,7 +600,7 @@ class TestFailTaskBranches:
         scheduler.on_task_completed = AsyncMock()
 
         task = make_task("ft-2", status=TaskStatus.RUNNING)
-        task.metadata["_error"] = "炸了"
+        task.set_error("炸了")
         await store.save(task)
         exec_ctx = ExecutionContext(
             ctx=mock_ctx, store=store, scheduler=scheduler,
@@ -674,7 +674,7 @@ class TestInstantExecutorBranches:
     async def test_append_motivation_note_skips_without_cross_stream(
         self, mock_ctx: MockCtx,
     ) -> None:
-        """非跨流回复（无 reply_stream_id 且无 _is_reply）→ 不写动机注释。"""
+        """非跨流回复（无 reply_stream_id 且非 is_reply_task）→ 不写动机注释。"""
         executor = InstantExecutor()
         task = make_task("mn-1")
         exec_ctx = ExecutionContext(
@@ -691,7 +691,7 @@ class TestInstantExecutorBranches:
         """无 prompt_service → 不写动机注释。"""
         executor = InstantExecutor()
         task = make_task("mn-2")
-        task.metadata["_is_reply"] = True
+        task.mark_as_reply()
         exec_ctx = ExecutionContext(
             ctx=mock_ctx, store=AsyncMock(), scheduler=AsyncMock(),
             config=MaibotAgentConfig(), prompt_service=None,
@@ -706,7 +706,7 @@ class TestInstantExecutorBranches:
         """上下文写入异常 → 仅记日志，不抛出。"""
         executor = InstantExecutor()
         task = make_task("mn-3")
-        task.metadata["_is_reply"] = True
+        task.mark_as_reply()
         exec_ctx = ExecutionContext(
             ctx=mock_ctx, store=AsyncMock(), scheduler=AsyncMock(),
             config=MaibotAgentConfig(), prompt_service=_make_prompt_service(),

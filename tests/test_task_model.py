@@ -8,6 +8,15 @@ from datetime import datetime, timedelta
 import pytest
 
 from oh_mai_agent.domain.task_record import (
+    META_CALLER_ROLE,
+    META_COOP_PAUSED,
+    META_ERROR,
+    META_INJECT_QUEUE,
+    META_IS_REPLY,
+    META_LAST_HISTORY_ID,
+    META_PAUSED_BY_STOP,
+    META_RECOVERED_FROM_RUNNING,
+    META_USER_REPLY,
     TaskRecord,
     TaskLevel,
     TaskStatus,
@@ -643,3 +652,181 @@ class TestReplyTarget:
         t = TaskRecord.from_dict(d)
         assert t.reply_stream_id is None
         assert t.reply_target == "qq:10001"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# metadata 类型化访问器（META_* 契约）
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestMetadataAccessors:
+    """metadata 保留键必须经 TaskRecord 类型化访问器读写（键名收口 + 类型归一 + 脏数据容错）。"""
+
+    def _task(self, **kw):
+        return TaskRecord(id="t", title="T", intent="I", level=TaskLevel.AGENT,
+                          owner="qq:1", stream_id="qq:10001", platform="qq", **kw)
+
+    def test_meta_constants_preserve_legacy_keys(self) -> None:
+        """META_* 常量必须等于历史落库键名（数据库兼容性契约，禁止改名）。"""
+        assert META_CALLER_ROLE == "_caller_role"
+        assert META_INJECT_QUEUE == "_inject_queue"
+        assert META_USER_REPLY == "_user_reply"
+        assert META_COOP_PAUSED == "_coop_paused"
+        assert META_PAUSED_BY_STOP == "_paused_by_stop"
+        assert META_IS_REPLY == "_is_reply"
+        assert META_LAST_HISTORY_ID == "_last_history_id"
+        assert META_ERROR == "_error"
+        assert META_RECOVERED_FROM_RUNNING == "_recovered_from_running"
+
+    # ── 注入指令队列 ──
+
+    def test_injection_queue_push_then_take(self) -> None:
+        """push_injection 追加，take_injections 一次性消费后键消失。"""
+        t = self._task()
+        t.push_injection("指令一")
+        t.push_injection("指令二")
+        assert t.metadata[META_INJECT_QUEUE] == ["指令一", "指令二"]
+        assert t.take_injections() == ["指令一", "指令二"]
+        assert t.take_injections() == []
+        assert META_INJECT_QUEUE not in t.metadata
+
+    def test_injection_queue_tolerates_legacy_garbage(self) -> None:
+        """历史脏数据（非 list）→ 按空队列处理，不抛异常。"""
+        t = self._task()
+        t.metadata[META_INJECT_QUEUE] = "not-a-list"
+        assert t.take_injections() == []
+
+    def test_injection_queue_coerces_items_to_str(self) -> None:
+        t = self._task()
+        t.metadata[META_INJECT_QUEUE] = [1, None, "x"]
+        assert t.take_injections() == ["1", "None", "x"]
+
+    # ── 用户回复 ──
+
+    def test_user_reply_set_read_take(self) -> None:
+        t = self._task()
+        assert t.user_reply() == ""
+        t.set_user_reply("好的")
+        assert t.user_reply() == "好的"
+        assert t.take_user_reply() == "好的"
+        assert t.user_reply() == ""
+
+    # ── 协作暂停 ──
+
+    def test_coop_paused_flag(self) -> None:
+        t = self._task()
+        assert t.is_coop_paused() is False
+        t.set_coop_paused(True)
+        assert t.is_coop_paused() is True
+        t.set_coop_paused(False)
+        assert t.is_coop_paused() is False
+
+    def test_paused_by_stop_marker(self) -> None:
+        t = self._task()
+        assert t.was_paused_by_stop() is False
+        t.mark_paused_by_stop()
+        assert t.was_paused_by_stop() is True
+
+    # ── 回复任务标记 ──
+
+    def test_reply_task_marker(self) -> None:
+        t = self._task()
+        assert t.is_reply_task() is False
+        t.mark_as_reply()
+        assert t.is_reply_task() is True
+
+    # ── 历史水位 ──
+
+    def test_last_history_id_roundtrip(self) -> None:
+        t = self._task()
+        assert t.last_history_id() is None
+        t.set_last_history_id(42)
+        assert t.last_history_id() == 42
+
+    def test_last_history_id_tolerates_garbage(self) -> None:
+        """非法水位（含 bool）→ 返回 None，不抛异常。"""
+        t = self._task()
+        t.metadata[META_LAST_HISTORY_ID] = "abc"
+        assert t.last_history_id() is None
+        t.metadata[META_LAST_HISTORY_ID] = True
+        assert t.last_history_id() is None
+
+    # ── 失败原因 ──
+
+    def test_error_set_read(self) -> None:
+        t = self._task()
+        assert t.error() is None
+        t.set_error("boom")
+        assert t.error() == "boom"
+
+    # ── 恢复标记 ──
+
+    def test_recovered_from_running_marker(self) -> None:
+        t = self._task()
+        assert t.was_recovered_from_running() is False
+        t.mark_recovered_from_running()
+        assert t.was_recovered_from_running() is True
+
+    # ── 创建者角色 ──
+
+    def test_caller_role_accepts_str_and_enum_like(self) -> None:
+        t = self._task()
+        assert t.caller_role() is None
+        t.set_caller_role("admin")
+        assert t.caller_role() == "admin"
+
+        class _FakeRole:
+            value = "user"
+
+        t2 = self._task()
+        t2.set_caller_role(_FakeRole())
+        assert t2.caller_role() == "user"
+
+    def test_caller_role_ignores_none(self) -> None:
+        t = self._task()
+        t.set_caller_role(None)
+        assert t.caller_role() is None
+        assert META_CALLER_ROLE not in t.metadata
+
+    # ── 序列化往返 ──
+
+    def test_accessors_roundtrip_through_dict(self) -> None:
+        """全部保留键经 to_dict/from_dict 往返后访问器语义不变。"""
+        t = self._task()
+        t.push_injection("i1")
+        t.set_user_reply("r")
+        t.set_coop_paused(True)
+        t.mark_as_reply()
+        t.set_last_history_id(7)
+        t.set_error("e")
+        t.mark_paused_by_stop()
+        t.mark_recovered_from_running()
+        t.set_caller_role("admin")
+
+        t2 = TaskRecord.from_dict(t.to_dict())
+        assert t2.metadata == t.metadata
+        assert t2.take_injections() == ["i1"]
+        assert t2.user_reply() == "r"
+        assert t2.is_coop_paused() is True
+        assert t2.is_reply_task() is True
+        assert t2.last_history_id() == 7
+        assert t2.error() == "e"
+        assert t2.was_paused_by_stop() is True
+        assert t2.was_recovered_from_running() is True
+        assert t2.caller_role() == "admin"
+
+    def test_from_dict_tolerates_legacy_garbage_metadata(self) -> None:
+        """历史脏数据（键类型不符）加载不抛异常，访问器容错返回默认值。"""
+        d = {
+            "id": "t", "title": "T", "intent": "I", "level": "agent",
+            "owner": "qq:1", "stream_id": "qq:10001", "platform": "qq",
+            "metadata": {
+                "_coop_paused": "yes",
+                "_inject_queue": 123,
+                "_last_history_id": "x",
+            },
+        }
+        t = TaskRecord.from_dict(d)
+        # 真值语义与旧 metadata.get() 一致
+        assert t.is_coop_paused() is True
+        assert t.take_injections() == []
+        assert t.last_history_id() is None

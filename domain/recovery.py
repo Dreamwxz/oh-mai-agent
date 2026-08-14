@@ -43,7 +43,8 @@ class TaskRecovery:
 
         对 *record* 的副作用：
           * RUNNING 状态 → 调用 ``record.force(PENDING, …)``
-            （写入审计轨迹和元数据标记 ``_recovered_from_running``）。
+            （写入审计轨迹并经 ``mark_recovered_from_running()`` 打标记，
+            键 ``META_RECOVERED_FROM_RUNNING``）。
         """
         if record.status == TaskStatus.SCHEDULED:
             logger.debug("任务 %s 恢复动作: SCHEDULED → ENQUEUE（重新入队等待定时器触发）", record.id)
@@ -55,8 +56,8 @@ class TaskRecovery:
                 actor="recovery",
                 reason="recovered_from_running",
             )
-            record.metadata["_recovered_from_running"] = True
-            logger.debug("任务 %s 已恢复: RUNNING → PENDING（标记 _recovered_from_running）", record.id)
+            record.mark_recovered_from_running()
+            logger.debug("任务 %s 已恢复: RUNNING → PENDING（标记 META_RECOVERED_FROM_RUNNING）", record.id)
             return RecoveryAction.PENDING
 
         if record.status == TaskStatus.WAITING_INPUT:

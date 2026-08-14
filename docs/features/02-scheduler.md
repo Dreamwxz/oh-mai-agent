@@ -63,7 +63,7 @@ enqueue 对已处于 SCHEDULED 的任务幂等：跳过重复 transition（避�
 1. `transition(FAILED)` 后，用 `save(t, expected_status=RUNNING)` 守卫落盘。若 get 之后、save 之前循环已把任务持久化为终态（COMPLETED/CANCELLED），本次 FAILED 写入被原子拒绝，避免超时降级覆盖并发完成的终态记录。
 2. 无论保存是否成功，都从 running 集合移除，并 `bus.send(CANCEL)` 通知执行器协作停止（AgentLoop 收到后自行收尾）。
 
-`_coop_paused` 标记的任务跳过超时检查（`scheduler.py:526-527`）：暂停中的任务不计时，避免「暂停期间被超时误杀」。
+`is_coop_paused()` 标记的任务跳过超时检查（`scheduler.py:526-527`）：暂停中的任务不计时，避免「暂停期间被超时误杀」。
 
 ### 取消 / 暂停 / 恢复：按状态分路径
 
@@ -75,7 +75,7 @@ enqueue 对已处于 SCHEDULED 的任务幂等：跳过重复 transition（避�
 
 已处于终态的任务不可取消，返回 False。
 
-`pause()`（`scheduler.py:267`）只对 RUNNING 任务生效：写 `metadata["_coop_paused"] = True` 落盘，再 `bus.send(PAUSE)`。`resume()`（`scheduler.py:291`）分两种情况：RUNNING 且带 `_coop_paused` 标记的，清标记并 `bus.send(RESUME)` 让循环继续；PAUSED 的，转入 PENDING 重新排队。
+`pause()`（`scheduler.py:267`）只对 RUNNING 任务生效：经 `set_coop_paused(True)` 落盘（键 `META_COOP_PAUSED`），再 `bus.send(PAUSE)`。`resume()`（`scheduler.py:291`）分两种情况：RUNNING 且 `is_coop_paused()` 为真的，清标记并 `bus.send(RESUME)` 让循环继续；PAUSED 的，转入 PENDING 重新排队。
 
 ### Cron 循环重排：仅 COMPLETED 才循环
 
@@ -83,7 +83,7 @@ enqueue 对已处于 SCHEDULED 的任务幂等：跳过重复 transition（避�
 
 ### 停止：RUNNING 降级 PAUSED
 
-`stop()`（`scheduler.py:100`）取消检查循环和事件监听，然后把所有 RUNNING 任务 `force(PAUSED)` 落盘（标记 `_paused_by_stop`），由恢复机制在下次启动时重新入队。
+`stop()`（`scheduler.py:100`）取消检查循环和事件监听，然后把所有 RUNNING 任务 `force(PAUSED)` 落盘（经 `mark_paused_by_stop()` 打标记，键 `META_PAUSED_BY_STOP`），由恢复机制在下次启动时重新入队。
 
 ---
 

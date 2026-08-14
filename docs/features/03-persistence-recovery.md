@@ -59,17 +59,17 @@ sqlite 持久化存储与插件重启后的活跃任务恢复。所有任务记�
 | 原状态 | 恢复动作 | 调用方行为 |
 |---|---|---|
 | SCHEDULED | ENQUEUE | 直接 `scheduler.enqueue(task)`，等待定时器到点触发（重新入队幂等，不再产生非法状态转换错误日志） |
-| RUNNING | PENDING | 决策器已 `force(PENDING, actor="recovery", reason="recovered_from_running")` 并打 `_recovered_from_running` 标记（recovery.py:53-61）；调用方落盘后重新入队（lifecycle.py:266-270） |
+| RUNNING | PENDING | 决策器已 `force(PENDING, actor="recovery", reason="recovered_from_running")` 并经 `mark_recovered_from_running()` 打标记（recovery.py:53-61，键 `META_RECOVERED_FROM_RUNNING`）；调用方落盘后重新入队（lifecycle.py:266-270） |
 | WAITING_INPUT | WAITING | 保持状态；旧进程的 resume Event 已随进程消失，等 `chat.receive.after_process` Hook 收到用户回复后，经命令总线 RESUME_REPLY 唤醒 |
 | PAUSED | PAUSED | 不做任何操作，须手动恢复 |
 
-RUNNING 降级走 `force` 而非 `transition`，因为 RUNNING→PENDING 不在状态机允许表里，重启恢复属于必须绕过校验的兜底场景。`_recovered_from_running` 标记用来区分"恢复重排"与"正常排队"。
+RUNNING 降级走 `force` 而非 `transition`，因为 RUNNING→PENDING 不在状态机允许表里，重启恢复属于必须绕过校验的兜底场景。`was_recovered_from_running()` 标记用来区分"恢复重排"与"正常排队"。
 
 ### 历史回放
 
-`task_history` 表是任务上下文的持久化形态。AgentLoop 每轮把消息写入历史：第 1 轮存完整 `messages` 列表作回放种子，后续轮只存 `new_messages` 增量（agent_loop.py:452-455）；`append_history` 返回自增 id，作为持久化水位记入 `task.metadata["_last_history_id"]`（agent_loop.py:456-457）。
+`task_history` 表是任务上下文的持久化形态。AgentLoop 每轮把消息写入历史：第 1 轮存完整 `messages` 列表作回放种子，后续轮只存 `new_messages` 增量（agent_loop.py:452-455）；`append_history` 返回自增 id，经 `set_last_history_id()` 作为持久化水位记入（键 `META_LAST_HISTORY_ID`，agent_loop.py:456-457）。
 
-重启恢复后的新 AgentLoop 在构建上下文时从头幂等回放：`get_history_after(task.id, 0)`（agent_loop.py:390-398）按 id 升序取出全部条目，injection 条目重建为 system 消息，`messages` 条目整条替换，`new_messages` 条目增量追加。以 0 为起点意味着每次恢复都全量重建，天然幂等；`_last_history_id` 仅作审计与未来增量续传的锚点。`MAX_HISTORY_KEEP = 50`（agent_loop.py:41）声明了每任务历史条目的预期上限，但当前没有裁剪逻辑消费该常量。
+重启恢复后的新 AgentLoop 在构建上下文时从头幂等回放：`get_history_after(task.id, 0)`（agent_loop.py:390-398）按 id 升序取出全部条目，injection 条目重建为 system 消息，`messages` 条目整条替换，`new_messages` 条目增量追加。以 0 为起点意味着每次恢复都全量重建，天然幂等；`last_history_id()` 仅作审计与未来增量续传的锚点。`MAX_HISTORY_KEEP = 50`（agent_loop.py:41）声明了每任务历史条目的预期上限，但当前没有裁剪逻辑消费该常量。
 
 ## 使用与配置
 

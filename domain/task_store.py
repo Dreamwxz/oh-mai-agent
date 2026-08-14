@@ -387,8 +387,8 @@ class TaskStore:
         """返回 id 大于 *after_id* 的历史条目，按 id 升序（回放顺序）。
 
         :class:`AgentLoop` 恢复时以 0 为起点从头回放全部条目，
-        幂等重建对话上下文；任务 metadata 的 ``_last_history_id``
-        记录持久化水位（审计 / 未来增量续传锚点）。
+        幂等重建对话上下文；任务经 ``TaskRecord.set_last_history_id()``
+        记录持久化水位（键 ``META_LAST_HISTORY_ID``，审计 / 未来增量续传锚点）。
         """
 
         def _get_after() -> list[dict]:

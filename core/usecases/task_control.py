@@ -61,8 +61,8 @@ class TaskControl:
             priority=task.priority,
             created_at=datetime.now(),
             updated_at=datetime.now(),
-            metadata={"_is_reply": True},
         )
+        reply_task.mark_as_reply()
         await self._store.save(reply_task)
         await self._scheduler.enqueue(reply_task)
         logger.info(
@@ -107,7 +107,7 @@ class TaskControl:
                 continue
             if fresh.status != TaskStatus.WAITING_INPUT:
                 continue
-            fresh.metadata["_user_reply"] = reply
+            fresh.set_user_reply(reply)
             await self._store.save(fresh)
             await self._command_bus.send(TaskCommand(
                 task_id=fresh.id,

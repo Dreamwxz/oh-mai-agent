@@ -134,9 +134,9 @@ class TaskScheduler:
                 continue
             try:
                 if task.status == TaskStatus.RUNNING:
-                    task.metadata.pop("_coop_paused", None)
+                    task.set_coop_paused(False)
                     task.force(TaskStatus.PAUSED, actor="scheduler", reason="paused_during_stop")
-                    task.metadata["_paused_by_stop"] = True
+                    task.mark_paused_by_stop()
                     await self._store.save(task)
                     logger.info("任务 %s 在关闭时已暂停", tid)
             except Exception:
@@ -288,7 +288,7 @@ class TaskScheduler:
         if task is None or task.status != TaskStatus.RUNNING:
             return False
 
-        task.metadata["_coop_paused"] = True
+        task.set_coop_paused(True)
         await self._store.save(task)
         await self._command_bus.send(
             TaskCommand(task_id=task.id, kind=CommandKind.PAUSE),
@@ -313,9 +313,9 @@ class TaskScheduler:
             return False
 
         if task.status == TaskStatus.RUNNING:
-            if not task.metadata.get("_coop_paused"):
+            if not task.is_coop_paused():
                 return False
-            task.metadata.pop("_coop_paused", None)
+            task.set_coop_paused(False)
             task.started_at = datetime.now()
             await self._store.save(task)
             await self._command_bus.send(
@@ -551,7 +551,7 @@ class TaskScheduler:
                         if t is None or t.status != TaskStatus.RUNNING:
                             self._running.discard(tid)
                             continue
-                        if t.metadata.get("_coop_paused"):
+                        if t.is_coop_paused():
                             continue
                         # started_at 缺失（如恢复场景）则无法计时，跳过本轮
                         if t.started_at is None:

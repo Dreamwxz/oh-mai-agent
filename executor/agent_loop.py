@@ -223,7 +223,7 @@ class AgentLoop:
         task.transition(TaskStatus.RUNNING)
         await self._store.save(task)
 
-        reply: str = task.metadata.pop("_user_reply", "") or ""
+        reply = task.take_user_reply()
         return {"success": True, "reply": reply}
 
     # ── 指令注入消费 ───────────────────────────────────────────────────
@@ -242,14 +242,14 @@ class AgentLoop:
     ) -> None:
         """消费所有待注入指令，将其作为 system 消息插入到 LLM 消息列表。
 
-        从 task.metadata 读取待注入指令。
+        经 ``task.take_injections()`` 弹出待注入指令（一次性清空）。
         """
-        inject_queue: list[str] = task.metadata.pop("_inject_queue", [])
+        injections = task.take_injections()
 
-        if not inject_queue:
+        if not injections:
             return
-        while inject_queue:
-            instruction = inject_queue.pop(0)
+        while injections:
+            instruction = injections.pop(0)
             messages.append(self._build_injection_message(instruction))
             await self._store.append_history(task.id, {
                 "type": "injection",
@@ -270,13 +270,13 @@ class AgentLoop:
         if cmd.kind == CommandKind.INJECT_INSTRUCTION:
             instruction = cmd.payload.get("instruction", "")
             if instruction:
-                task.metadata.setdefault("_inject_queue", []).append(instruction)
+                task.push_injection(instruction)
                 logger.info(
                     "总线注入指令到任务 %s：%s", task.id, instruction[:80],
                 )
         elif cmd.kind == CommandKind.RESUME_REPLY:
             reply = cmd.payload.get("reply", "")
-            task.metadata["_user_reply"] = reply
+            task.set_user_reply(reply)
             resume_event = self._resume_events.get(task.id)
             if resume_event is not None:
                 resume_event.set()
@@ -294,11 +294,11 @@ class AgentLoop:
             # 暂停标记必须落在循环自有对象上：调度器 pause() 写在独立
             # 副本上，会被本循环轮次整记录保存覆盖；写回自有对象后
             # 后续轮次保存会保留该标记（resume/超时跳过依赖它）。
-            task.metadata["_coop_paused"] = True
+            task.set_coop_paused(True)
         elif cmd.kind == CommandKind.RESUME:
             self._paused = False
             self._pause_event.set()
-            task.metadata.pop("_coop_paused", None)
+            task.set_coop_paused(False)
             task.started_at = datetime.now()
             await self._store.save(task)
 
@@ -390,7 +390,7 @@ class AgentLoop:
             # 从头回放全部已持久化条目，幂等重建对话上下文：
             # 第 1 轮条目是完整消息种子（替换），后续轮是增量
             # （new_messages 追加），injection 条目重建为 system 消息。
-            # metadata["_last_history_id"] 是持久化水位（审计 / 未来增量续传锚点）。
+            # task.set_last_history_id() 记录持久化水位（审计 / 未来增量续传锚点）。
             for _entry in await self._store.get_history_after(task.id, 0):
                 if _entry.get("type") == "injection":
                     instruction = _entry.get("instruction", "")
@@ -458,7 +458,7 @@ class AgentLoop:
                     else:
                         _entry["new_messages"] = messages[_msgs_before:]
                     _history_id = await self._store.append_history(task.id, _entry)
-                    task.metadata["_last_history_id"] = _history_id
+                    task.set_last_history_id(_history_id)
                     persisted = await self._store.get(task.id)
                     if persisted is None or not persisted.is_terminal():
                         await self._store.save(
@@ -551,7 +551,7 @@ class AgentLoop:
                 else:
                     _entry["new_messages"] = messages[_msgs_before:]
                 _history_id = await self._store.append_history(task.id, _entry)
-                task.metadata["_last_history_id"] = _history_id
+                task.set_last_history_id(_history_id)
                 persisted = await self._store.get(task.id)
                 if persisted is None or not persisted.is_terminal():
                     await self._store.save(
@@ -618,8 +618,8 @@ class AgentLoop:
                 await self._finalize_cancelled(task)
                 return
             logger.exception("任务 %s 执行异常失败", task.id)
-            # 在发送前记录错误信息到 metadata（send_final 需要用到）。
-            task.metadata["_error"] = str(exc)
+            # 记录错误信息（send_final 发送失败消息时读取）。
+            task.set_error(str(exc))
             if self._send_final is not None:
                 await self._send_final(task, f"任务失败：{exc}")
             try:

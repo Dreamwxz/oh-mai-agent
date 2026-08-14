@@ -491,7 +491,7 @@ async def fail_task(
         return
 
     if send_message:
-        error_reason = task.metadata.get("_error") or "任务执行失败"
+        error_reason = task.error() or "任务执行失败"
         fail_text = f"任务执行失败: {error_reason}"
         try:
             await send_final_reply(
@@ -540,7 +540,7 @@ class InstantExecutor:
                 kind="reply",
                 requester=requester,
             )
-            if task.reply_stream_id is not None or bool(task.metadata.get("_is_reply")):
+            if task.reply_stream_id is not None or task.is_reply_task():
                 await self._append_motivation_note(exec_ctx, task)
             fresh_task = await exec_ctx.store.get(task.id)
             if fresh_task is None or not fresh_task.is_terminal():
@@ -556,7 +556,7 @@ class InstantExecutor:
                 persisted_task = None
             if persisted_task is not None:
                 failure_task = persisted_task
-            failure_task.metadata["_error"] = str(exc)
+            failure_task.set_error(str(exc))
             await fail_task(
                 failure_task,
                 exec_ctx.store,
@@ -601,7 +601,7 @@ class InstantExecutor:
         的动机注释由父进程在 completed 事件后直接写入——与迁移前
         ``send_final_reply`` 的 motivation 分支语义一致（同模板、同记录）。
         """
-        if task.reply_stream_id is None and not bool(task.metadata.get("_is_reply")):
+        if task.reply_stream_id is None and not task.is_reply_task():
             return
         prompt_service = exec_ctx.prompt_service
         if prompt_service is None:

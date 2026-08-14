@@ -60,10 +60,10 @@ class TestRecoveryRunningToPending:
 
     def test_sets_recovered_metadata(self) -> None:
         """给定 RUNNING 记录，当调用 recover() 时，
-        metadata['_recovered_from_running'] 为 True。"""
+        was_recovered_from_running() 为 True。"""
         r = _make_record(TaskStatus.RUNNING)
         TaskRecovery.recover(r)
-        assert r.metadata.get("_recovered_from_running") is True
+        assert r.was_recovered_from_running()
 
 
 class TestRecoveryWaitingInputKept:

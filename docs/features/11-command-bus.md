@@ -36,7 +36,7 @@ Agent 任务执行需要跨组件协作：调度器要往运行中的 AgentLoop 
 
 命令订阅跟随 AgentLoop 的执行生命周期，注册与清理都在循环内部完成：
 
-- **主订阅**：AgentLoop 在 `run()` 入口 `bus.subscribe(task.id, self._on_bus_command)`（`executor/agent_loop.py` 的 `AgentLoop.run`），在 `finally` 块 `bus.unsubscribe(task.id)` 移除该任务的全部处理器，保证任务结束后路由表不残留。ask_user 挂起期间的唤醒**不再需要临时订阅**——用户回复经 `chat.receive.after_process` Hook → `TaskControl.handle_user_reply` 发送 `RESUME_REPLY`，由主订阅 `_on_bus_command` 的 RESUME_REPLY 分支写入 `_user_reply` 并 set resume_event（旧的 `_on_resume_reply` 重复订阅已移除）。
+- **主订阅**：AgentLoop 在 `run()` 入口 `bus.subscribe(task.id, self._on_bus_command)`（`executor/agent_loop.py` 的 `AgentLoop.run`），在 `finally` 块 `bus.unsubscribe(task.id)` 移除该任务的全部处理器，保证任务结束后路由表不残留。ask_user 挂起期间的唤醒**不再需要临时订阅**——用户回复经 `chat.receive.after_process` Hook → `TaskControl.handle_user_reply` 发送 `RESUME_REPLY`，由主订阅 `_on_bus_command` 的 RESUME_REPLY 分支经 `set_user_reply()` 写入并 set resume_event（旧的 `_on_resume_reply` 重复订阅已移除）。
 
 事件监听则常驻：调度器在 `start()` 中 `asyncio.create_task(listen_events(self._on_task_event))`（`core/scheduler.py` 的 `TaskScheduler.start`），`stop()` 时取消该任务。
 
@@ -66,7 +66,7 @@ Agent 任务执行需要跨组件协作：调度器要往运行中的 AgentLoop 
 | 事件生产者 | `AgentLoop`（完成、失败、取消收尾） | COMPLETED / FAILED / CANCELLED |
 | 事件消费者 | `TaskScheduler._on_task_event`（`core/scheduler.py`） | COMPLETED / FAILED / CANCELLED |
 
-命令消费端 `AgentLoop._on_bus_command`（`executor/agent_loop.py`）按 kind 分支：`INJECT_INSTRUCTION` 把指令追加到 `metadata["_inject_queue"]`，下一轮循环消费；`RESUME_REPLY` 写入 `_user_reply` 并 set 对应的 resume_event；`CANCEL` 置 `_cancelled` 标记并唤醒等待；`PAUSE` 置 `_paused` 并写 `_coop_paused` 标记；`RESUME` 清标记恢复。
+命令消费端 `AgentLoop._on_bus_command`（`executor/agent_loop.py`）按 kind 分支：`INJECT_INSTRUCTION` 经 `push_injection()` 追加到注入队列（键 `META_INJECT_QUEUE`），下一轮循环消费；`RESUME_REPLY` 经 `set_user_reply()` 写入并 set 对应的 resume_event；`CANCEL` 置 `_cancelled` 标记并唤醒等待；`PAUSE` 置 `_paused` 并经 `set_coop_paused()` 写标记；`RESUME` 清标记恢复。
 
 协作取消是总线价值的典型体现：调度器超时检测或用户取消时 `bus.send(CANCEL)`，AgentLoop 收到后置取消标记，在下一轮循环或等待点协作退出，而不是被外部强杀。
 

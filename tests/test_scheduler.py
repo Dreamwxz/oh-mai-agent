@@ -327,7 +327,7 @@ class TestPauseResume:
         assert ok is True
         updated = await store.get("t1")
         assert updated.status == TaskStatus.RUNNING
-        assert updated.metadata.get("_coop_paused") is True
+        assert updated.is_coop_paused()
 
     @pytest.mark.asyncio
     async def test_pause_non_running_fails(self, store: TaskStore, task_config: TaskConfig, command_bus: Any) -> None:
@@ -544,7 +544,7 @@ class TestSchedulerLifecycle:
         scheduler._running.add("t1")
 
         t = make_task("t1", status=TaskStatus.RUNNING)
-        t.metadata["_coop_paused"] = True
+        t.set_coop_paused(True)
         await store.save(t)
 
         await scheduler.stop()
@@ -552,8 +552,8 @@ class TestSchedulerLifecycle:
         updated = await store.get("t1")
         assert updated is not None
         assert updated.status == TaskStatus.PAUSED
-        assert updated.metadata.get("_coop_paused") is None
-        assert updated.metadata.get("_paused_by_stop") is True
+        assert updated.is_coop_paused() is False
+        assert updated.was_paused_by_stop()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -806,7 +806,7 @@ class TestCheckLoop:
     async def test_coop_paused_running_task_skips_timeout(
         self, store: TaskStore, command_bus: Any, monkeypatch: Any,
     ) -> None:
-        """协作暂停（_coop_paused）的 RUNNING 任务不参与超时检测。"""
+        """协作暂停（is_coop_paused）的 RUNNING 任务不参与超时检测。"""
         cfg = TaskConfig(max_concurrent_tasks=2, max_runtime_min=1)
         scheduler = TaskScheduler(cfg, store, _noop_executor, command_bus=command_bus)
 
@@ -814,7 +814,7 @@ class TestCheckLoop:
             "coop", status=TaskStatus.RUNNING,
             started_at=datetime.now() - timedelta(minutes=10),
         )
-        t.metadata["_coop_paused"] = True
+        t.set_coop_paused(True)
         await store.save(t)
         scheduler._running.add("coop")
 
@@ -968,10 +968,10 @@ class TestSchedulerErrorPaths:
     async def test_resume_coop_paused_running_task(
         self, store: TaskStore, task_config: TaskConfig, command_bus: Any,
     ) -> None:
-        """RUNNING + _coop_paused → 清除标记、重置 started_at、发 RESUME 命令。"""
+        """RUNNING + is_coop_paused → 清除标记、重置 started_at、发 RESUME 命令。"""
         scheduler = TaskScheduler(task_config, store, _noop_executor, command_bus=command_bus)
         t = make_task("resume-me", status=TaskStatus.RUNNING)
-        t.metadata["_coop_paused"] = True
+        t.set_coop_paused(True)
         await store.save(t)
         scheduler._running.add("resume-me")
 

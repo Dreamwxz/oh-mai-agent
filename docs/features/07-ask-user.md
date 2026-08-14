@@ -38,11 +38,11 @@ _handle_ask_user（executor/agent_loop.py 的 _handle_ask_user）
    ▼
 TaskManager.handle_user_reply（task_manager.py:374）
    → TaskControl.handle_user_reply（task_control.py:86-124）
-     查 WAITING_INPUT + owner 精确匹配 → 写 _user_reply → bus.send(RESUME_REPLY)
+     查 WAITING_INPUT + owner 精确匹配 → 经 set_user_reply() 写入 → bus.send(RESUME_REPLY)
    │
    ▼
 AgentLoop._on_bus_command（agent_loop.py:273-279）
-   写 _user_reply + resume_event.set()
+   经 set_user_reply() 写入 + resume_event.set()
    │
    ▼
 _handle_ask_user 恢复：transition(RUNNING) → 返回 reply 给 Agent
@@ -56,9 +56,9 @@ _handle_ask_user 恢复：transition(RUNNING) → 返回 reply 给 Agent
 2. **再改状态**：`task.transition(WAITING_INPUT)` 并 save 落盘，保证重启后任务恢复为 WAITING_INPUT 而非 RUNNING。
 3. **发问**：调用 `on_ask(stream_id, question)` 回调把问题发送到聊天流。
 4. **阻塞等待**：`await resume_event.wait()` 无限期挂起，直到收到恢复信号。
-5. **恢复**：收到信号后 `transition(RUNNING)` 并 save，从 `metadata` 弹出 `_user_reply` 作为工具返回值交给 Agent。
+5. **恢复**：收到信号后 `transition(RUNNING)` 并 save，经 `take_user_reply()` 弹出回复作为工具返回值交给 Agent。
 
-唤醒不依赖事件广播：用户回复经 Hook → `TaskControl.handle_user_reply` → `bus.send(RESUME_REPLY)`，由主订阅 `_on_bus_command` 的 RESUME_REPLY 分支写 `_user_reply` 并 set 恢复事件（v0.1.0 的 `WAITING_INPUT` 事件与 ask_user 临时订阅 `_on_resume_reply` 已移除）。
+唤醒不依赖事件广播：用户回复经 Hook → `TaskControl.handle_user_reply` → `bus.send(RESUME_REPLY)`，由主订阅 `_on_bus_command` 的 RESUME_REPLY 分支经 `set_user_reply()` 写入并 set 恢复事件（v0.1.0 的 `WAITING_INPUT` 事件与 ask_user 临时订阅 `_on_resume_reply` 已移除）。
 
 「先登记 Event、再改状态、后发问」的顺序保证挂起流程任意时刻都具备恢复能力：即使问题发送失败，Event 已经存在，用户回复或取消命令依然能唤醒任务。
 
@@ -70,9 +70,9 @@ _handle_ask_user 恢复：transition(RUNNING) → 返回 reply 给 Agent
 
 1. **Hook 入口**：插件注册 `chat.receive.after_process` Hook（`plugin.py:532-537`，name=`agent_user_reply`，OBSERVE 模式），从 message 中提取 `session_id` → stream_id、`user_info.user_id` → user_id、`processed_plain_text` → 回复文本（`plugin.py:550-556`），任一字段为空直接跳过。
 2. **门面转发**：`TaskManager.handle_user_reply()`（`core/task_manager.py:374`）是门面方法，转发给 TaskControl。
-3. **匹配与唤醒**：`TaskControl.handle_user_reply()`（`core/usecases/task_control.py:86-124`）按 `stream_id` 前缀解析出 platform，拼成 `full_owner = platform:user_id` 与任务 owner 做精确比较（`task_control.py:94-95`），在查询结果中找第一个 owner 匹配且仍为 WAITING_INPUT 的任务（二次 `store.get` 确认，防状态已变），把回复写入 `metadata["_user_reply"]` 并落盘，再 `command_bus.send(RESUME_REPLY)`（`task_control.py:110-116`），随后 `return`，**单次只唤醒第一个匹配任务**。
+3. **匹配与唤醒**：`TaskControl.handle_user_reply()`（`core/usecases/task_control.py:86-124`）按 `stream_id` 前缀解析出 platform，拼成 `full_owner = platform:user_id` 与任务 owner 做精确比较（`task_control.py:94-95`），在查询结果中找第一个 owner 匹配且仍为 WAITING_INPUT 的任务（二次 `store.get` 确认，防状态已变），把回复经 `set_user_reply()` 写入并落盘，再 `command_bus.send(RESUME_REPLY)`（`task_control.py:110-116`），随后 `return`，**单次只唤醒第一个匹配任务**。
 
-AgentLoop 侧，`_on_bus_command()` 收到 RESUME_REPLY 后把回复写入 `metadata["_user_reply"]` 并 `resume_event.set()`（`executor/agent_loop.py:273-279`），与挂起流程第 6 步的 `wait()` 衔接，任务恢复。
+AgentLoop 侧，`_on_bus_command()` 收到 RESUME_REPLY 后把回复经 `set_user_reply()` 写入并 `resume_event.set()`（`executor/agent_loop.py:273-279`），与挂起流程第 6 步的 `wait()` 衔接，任务恢复。
 
 匹配按 `stream_id + owner` 精确比较而非消息内容，是刻意的安全设计：只有任务所有者（或同流同平台用户）的回复才能唤醒任务，避免群聊中无关消息误触发。恢复动作还受 `task_control.py` 的二次状态校验保护，用户回复恰逢任务被取消时不会错误复活终态任务。
 

@@ -48,6 +48,40 @@ class TriggerType(str, Enum):
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# metadata 契约 — 跨组件隐式协作键的唯一定义
+# ═══════════════════════════════════════════════════════════════════════
+# metadata 是 TaskRecord 唯一可落库的扩展槽；本段集中声明全部保留键的名称
+# 与值类型，并统一经 TaskRecord 的类型化访问器读写。仓库其他位置不得再以
+# 字符串字面量直接访问这些键——新增协作键必须先在此声明并补充访问器。
+# 值类型约定：caller_role 存 Role.value 字符串；inject_queue 存 list[str]；
+# user_reply 存 str；coop_paused / paused_by_stop / is_reply /
+# recovered_from_running 存 bool；last_history_id 存 int；error 存 str。
+
+META_CALLER_ROLE = "_caller_role"                       # str — 任务创建者角色（Role.value），执行期角色解析优先使用
+META_INJECT_QUEUE = "_inject_queue"                     # list[str] — 待注入指令队列（INJECT_INSTRUCTION 命令追加，每轮 LLM 调用前消费）
+META_USER_REPLY = "_user_reply"                         # str — ask_user 挂起期间收到的用户回复
+META_COOP_PAUSED = "_coop_paused"                       # bool — 协作暂停标记（调度器与 AgentLoop 双方维护，暂停中跳过超时计时）
+META_PAUSED_BY_STOP = "_paused_by_stop"                 # bool — 插件关闭时被暂停的标记（恢复机制仅记录）
+META_IS_REPLY = "_is_reply"                             # bool — 回复投递任务标记（_dispatch_reply_instant 创建时设置）
+META_LAST_HISTORY_ID = "_last_history_id"               # int — 持久化历史水位（append_history 返回的自增 id）
+META_ERROR = "_error"                                   # str — 失败原因（发送失败消息时读取）
+META_RECOVERED_FROM_RUNNING = "_recovered_from_running" # bool — 重启时由 RUNNING 降级重排的标记（区分“恢复重排”与“正常排队”）
+
+# 已知键的期望值类型（from_dict 加载时校验告警用；不阻断反序列化）
+_META_EXPECTED_TYPES: dict[str, type] = {
+    META_CALLER_ROLE: str,
+    META_INJECT_QUEUE: list,
+    META_USER_REPLY: str,
+    META_COOP_PAUSED: bool,
+    META_PAUSED_BY_STOP: bool,
+    META_IS_REPLY: bool,
+    META_LAST_HISTORY_ID: int,
+    META_ERROR: str,
+    META_RECOVERED_FROM_RUNNING: bool,
+}
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # 异常
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -288,6 +322,163 @@ class TaskRecord:
         return self.reply_stream_id or self.stream_id
 
     # ─────────────────────────────────────────────────────────────────
+    # metadata 类型化访问器（键定义见本文件顶部 META_* 常量）
+    # ─────────────────────────────────────────────────────────────────
+    # metadata 仍是自由扩展槽（可存放自定义键），但全部保留键必须经下方
+    # 访问器读写：访问器负责键名收口、值类型归一与历史脏数据容错。
+
+    # ── 注入指令队列 ──
+
+    def push_injection(self, instruction: str) -> None:
+        """追加一条待注入指令（INJECT_INSTRUCTION 命令处理时调用）。
+
+        队列在 metadata 中以 ``list[str]`` 存储；历史脏数据非 list 时重置为空队列。
+        """
+        queue = self.metadata.get(META_INJECT_QUEUE)
+        if not isinstance(queue, list):
+            queue = []
+            self.metadata[META_INJECT_QUEUE] = queue
+        queue.append(instruction)
+
+    def take_injections(self) -> list[str]:
+        """弹出并返回全部待注入指令（每轮 LLM 调用前消费一次）。"""
+        queue = self.metadata.pop(META_INJECT_QUEUE, [])
+        if not isinstance(queue, list):
+            logger.warning(
+                "任务 %s：metadata[%s] 类型异常（期望 list，实际 %s），按空队列处理",
+                self.id, META_INJECT_QUEUE, type(queue).__name__,
+            )
+            return []
+        return [str(item) for item in queue]
+
+    # ── 用户回复（ask_user 挂起唤醒）──
+
+    def set_user_reply(self, reply: str) -> None:
+        """记录 ask_user 挂起期间收到的用户回复（TaskControl 与 AgentLoop 双写）。"""
+        self.metadata[META_USER_REPLY] = str(reply)
+
+    def user_reply(self) -> str:
+        """读取已记录的用户回复；无则返回空串（不消费）。"""
+        value = self.metadata.get(META_USER_REPLY)
+        return str(value) if value is not None else ""
+
+    def take_user_reply(self) -> str:
+        """弹出并返回用户回复；无则返回空串。"""
+        value = self.metadata.pop(META_USER_REPLY, None)
+        return str(value) if value is not None else ""
+
+    # ── 协作暂停 ──
+
+    def set_coop_paused(self, flag: bool = True) -> None:
+        """设置/清除协作暂停标记（调度器 pause/stop 与 AgentLoop PAUSE 分支维护）。
+
+        清除（flag=False）时移除键，保持持久化记录干净（与历史 ``pop`` 语义一致）。
+        """
+        if flag:
+            self.metadata[META_COOP_PAUSED] = True
+        else:
+            self.metadata.pop(META_COOP_PAUSED, None)
+
+    def is_coop_paused(self) -> bool:
+        """是否处于协作暂停（暂停中的任务跳过超时检测，恢复需先清标记）。"""
+        return bool(self.metadata.get(META_COOP_PAUSED, False))
+
+    def mark_paused_by_stop(self) -> None:
+        """标记任务在插件关闭时被暂停（恢复机制仅记录，不自动处理）。"""
+        self.metadata[META_PAUSED_BY_STOP] = True
+
+    def was_paused_by_stop(self) -> bool:
+        """是否因插件关闭而被暂停。"""
+        return bool(self.metadata.get(META_PAUSED_BY_STOP, False))
+
+    # ── 回复任务标记 ──
+
+    def mark_as_reply(self) -> None:
+        """标记本任务为回复投递任务（_dispatch_reply_instant 创建时设置）。"""
+        self.metadata[META_IS_REPLY] = True
+
+    def is_reply_task(self) -> bool:
+        """是否为回复投递任务（跨流回复的动机注释判断依赖此标记）。"""
+        return bool(self.metadata.get(META_IS_REPLY, False))
+
+    # ── 历史回放水位 ──
+
+    def set_last_history_id(self, history_id: int) -> None:
+        """记录持久化历史水位（append_history 返回的自增 id）。"""
+        self.metadata[META_LAST_HISTORY_ID] = int(history_id)
+
+    def last_history_id(self) -> int | None:
+        """读取历史水位；无或非法时返回 None（bool 是 int 子类，防御性排除）。"""
+        value = self.metadata.get(META_LAST_HISTORY_ID)
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            logger.warning(
+                "任务 %s：metadata[%s] 非法（%r），按无水位处理",
+                self.id, META_LAST_HISTORY_ID, value,
+            )
+            return None
+
+    # ── 失败原因 ──
+
+    def set_error(self, message: str) -> None:
+        """记录失败原因（失败消息发送时读取）。"""
+        self.metadata[META_ERROR] = str(message)
+
+    def error(self) -> str | None:
+        """读取失败原因；无则返回 None。"""
+        value = self.metadata.get(META_ERROR)
+        return str(value) if value is not None else None
+
+    # ── 恢复标记 ──
+
+    def mark_recovered_from_running(self) -> None:
+        """标记任务由 RUNNING 在重启时降级重排（区分“恢复重排”与“正常排队”）。"""
+        self.metadata[META_RECOVERED_FROM_RUNNING] = True
+
+    def was_recovered_from_running(self) -> bool:
+        """是否由 RUNNING 在重启时降级重排。"""
+        return bool(self.metadata.get(META_RECOVERED_FROM_RUNNING, False))
+
+    # ── 创建者角色 ──
+
+    def set_caller_role(self, role: object) -> None:
+        """记录任务创建者角色（存储 Role.value 字符串；执行期角色解析优先使用）。
+
+        Args:
+            role: Role 枚举或 Role.value 字符串；None 忽略。
+        """
+        value = getattr(role, "value", role)
+        if value is None:
+            return
+        self.metadata[META_CALLER_ROLE] = str(value)
+
+    def caller_role(self) -> str | None:
+        """读取创建者角色（Role.value 字符串）；无则返回 None。"""
+        value = self.metadata.get(META_CALLER_ROLE)
+        return str(value) if value is not None else None
+
+    # ── 加载校验 ──
+
+    def _warn_metadata_types(self) -> None:
+        """加载时校验已知 metadata 键的值类型，非法值仅告警不阻断（兼容历史脏数据）。
+
+        由 ``from_dict`` 反序列化完成后调用；运行期经访问器读写不会再产生脏值。
+        """
+        for key, expected in _META_EXPECTED_TYPES.items():
+            if key not in self.metadata:
+                continue
+            value = self.metadata[key]
+            if value is None or isinstance(value, expected):
+                continue
+            logger.warning(
+                "任务 %s：metadata[%s] 类型异常（期望 %s，实际 %s），相关功能可能失效",
+                self.id, key, expected.__name__, type(value).__name__,
+            )
+
+    # ─────────────────────────────────────────────────────────────────
     # 序列化
     # ─────────────────────────────────────────────────────────────────
 
@@ -350,5 +541,7 @@ class TaskRecord:
         raw_log: list[dict[str, Any]] = data.get("_status_log", [])
         if raw_log:
             record._status_log = [StatusChange.from_dict(e) for e in raw_log]
+
+        record._warn_metadata_types()
 
         return record

@@ -41,7 +41,7 @@
 **注入点**集中在 Agent 循环（`executor/agent_loop.py`）：
 
 - **system prompt 构建**：AgentLoop 启动时 `prompt_service.build("agent_system", task=task)` 生成 system prompt（`agent_loop.py:378-383`）。
-- **指令注入消费**：每轮 LLM 调用前 `_consume_injections()` 从 `metadata["_inject_queue"]` 弹出待注入指令，逐条经 `_build_injection_message()` 格式化为 system 消息插入，并落历史（`agent_loop.py:234-256`）。
+- **指令注入消费**：每轮 LLM 调用前 `_consume_injections()` 经 `take_injections()` 弹出待注入指令，逐条经 `_build_injection_message()` 格式化为 system 消息插入，并落历史（`agent_loop.py:234-256`）。
 - **注入消息格式化**：`_build_injection_message()` 调用 `prompt_service.build("injection", instruction=...)`（`agent_loop.py:227-233`）。历史回放时 injection 条目同样重建为 system 消息，保证恢复后上下文一致（`agent_loop.py:390-394`）。
 
 其余 builder 的调用点：`title` 在任务创建时（`lifecycle.py` 的 `llm_title` 回调），`polish` 在 `PolishService.polish()`（`executor/instant.py`），`planner_board` 在 `PlannerBoard.build_summary()`（`planner_hooks.py:120`），`context_note` 在跨流回复补写动机注释（`executor/instant.py:596`）。

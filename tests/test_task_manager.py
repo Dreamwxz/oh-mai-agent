@@ -856,7 +856,7 @@ class TestInstantExecution:
         self, mock_ctx: MockCtx, resolver: PermissionResolver, config: MaibotAgentConfig,
          real_store: TaskStore, command_bus: Any,
     ) -> None:
-        """_dispatch_reply_instant 创建的 reply 任务 metadata 中包含 _is_reply=True。"""
+        """_dispatch_reply_instant 创建的 reply 任务 is_reply_task() 为 True。"""
         await real_store.init()
         sched = FakeScheduler()
         control = TaskControl(
@@ -879,8 +879,8 @@ class TestInstantExecution:
 
         assert sched.enqueued, "Reply instant should be enqueued"
         reply_task = sched.enqueued[0]
-        assert reply_task.metadata.get("_is_reply") is True, \
-            f"Expected metadata._is_reply=True, got {reply_task.metadata}"
+        assert reply_task.is_reply_task(), \
+            f"Expected is_reply_task()=True, got metadata={reply_task.metadata}"
 
     @pytest.mark.asyncio
     async def test_execute_instant_cross_stream_appends_context(
@@ -969,7 +969,7 @@ class TestInstantExecution:
             reply_stream_id="qq:g:2",
             status=TaskStatus.RUNNING,
         )
-        task.metadata["_error"] = "boom"
+        task.set_error("boom")
         await real_store.save(task)
         exec_ctx = ExecutionContext(
             ctx=mock_ctx, store=real_store, scheduler=sched, config=config,
@@ -1143,7 +1143,7 @@ class TestInstantFailSend:
             stream_id="qq:g:1", platform="qq",
             status=TaskStatus.RUNNING,
         )
-        task.metadata["_error"] = "测试错误原因"
+        task.set_error("测试错误原因")
         await real_store.save(task)
 
         exec_ctx = ExecutionContext(
@@ -1285,10 +1285,10 @@ class TestHandleUserReplyPrivateStream:
             reply="继续",
         )
 
-        # 任务 metadata 已写入 _user_reply
+        # 任务经 set_user_reply 已写入回复
         updated = await real_store.get("t1")
         assert updated is not None
-        assert updated.metadata.get("_user_reply") == "继续"
+        assert updated.user_reply() == "继续"
 
 
 class TestAskCallback:

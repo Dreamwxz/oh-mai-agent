@@ -109,8 +109,8 @@
 ### 取消 / 暂停 / 恢复
 
 - `cancel()`（`core/scheduler.py:222-265`）：SCHEDULED / PENDING / PAUSED 直接转 CANCELLED 落盘并出队；RUNNING / WAITING_INPUT 的 agent 任务经命令总线发 `CANCEL`，由 AgentLoop 协作停止
-- `pause()`（`core/scheduler.py:267-289`）：RUNNING 任务写 `metadata["_coop_paused"]` 落盘 + 发 `PAUSE` 命令，循环在自有 task 上响应
-- `resume()`（`core/scheduler.py:291-328`）：RUNNING（须有 `_coop_paused` 标记）清标记 + 发 `RESUME`；PAUSED 则重新排队回 PENDING
+- `pause()`（`core/scheduler.py:267-289`）：RUNNING 任务经 `set_coop_paused(True)` 落盘（键 `META_COOP_PAUSED`）+ 发 `PAUSE` 命令，循环在自有 task 上响应
+- `resume()`（`core/scheduler.py:291-328`）：RUNNING（须 `is_coop_paused()` 为真）清标记 + 发 `RESUME`；PAUSED 则重新排队回 PENDING
 
 ### Cron 循环重调度
 
@@ -167,7 +167,7 @@ on_load → load_plugin()（lifecycle.py:43-153）
 | 原状态 | 恢复动作 |
 |---|---|
 | SCHEDULED | 重新入队等待定时触发 |
-| RUNNING | 降级为 PENDING 重新排队（Agent 上下文丢失），写入 `metadata["_recovered_from_running"]` |
+| RUNNING | 降级为 PENDING 重新排队（Agent 上下文丢失），经 `mark_recovered_from_running()` 打标记（键 `META_RECOVERED_FROM_RUNNING`） |
 | WAITING_INPUT | 保持状态，等待用户回复经 Hook 重新唤醒 |
 | PAUSED / 终态 | 不动 |
 
@@ -231,13 +231,13 @@ PENDING 入队 → 并发额度空余 → RUNNING
 2. `transition(WAITING_INPUT)` + save
 3. 调 `on_ask` 回调向用户发问；无回调则直接 set 事件避免无限挂起
 4. `await resume_event.wait()` 阻塞等待
-5. 收到回复后转回 RUNNING，从 `metadata["_user_reply"]` 读取回复
+5. 收到回复后转回 RUNNING，经 `take_user_reply()` 读取回复
 
 唤醒不依赖事件广播：用户回复经 Hook → `TaskControl.handle_user_reply` → `bus.send(RESUME_REPLY)`，由主订阅 `_on_bus_command` 处理（v0.1.0 的 `WAITING_INPUT` 事件与 ask_user 临时订阅已移除）。
 
 ### 指令注入与总线命令
 
-`_consume_injections()`（`executor/agent_loop.py:234-256`）每轮 LLM 调用前从 `metadata["_inject_queue"]` 弹出指令，构建为 system 消息插入。`_on_bus_command()`（`executor/agent_loop.py:258-299`）处理四类命令：INJECT 写入注入队列；RESUME_REPLY 写 `_user_reply` + set 事件；CANCEL 置 `_cancelled` + set 事件；PAUSE 置 `_paused` + 在循环自有 task 上写 `metadata["_coop_paused"]`。
+`_consume_injections()`（`executor/agent_loop.py:234-256`）每轮 LLM 调用前经 `take_injections()` 弹出指令，构建为 system 消息插入。`_on_bus_command()`（`executor/agent_loop.py:258-299`）处理四类命令：INJECT 经 `push_injection()` 写入注入队列；RESUME_REPLY 经 `set_user_reply()` 写入 + set 事件；CANCEL 置 `_cancelled` + set 事件；PAUSE 置 `_paused` + 在循环自有 task 上经 `set_coop_paused()` 写标记。
 
 ### 最终完成路径的守卫
 
@@ -258,7 +258,7 @@ PENDING 入队 → 并发额度空余 → RUNNING
 
 ### 设计逻辑
 
-回复路径要解决的核心问题是：**任务结果如何可靠地送达用户**。agent 任务完成、instant 任务、失败消息都产生对外回复，如果各自直发，就无法统一重试、无法在插件重启后恢复。因此设计把回复拆成独立的 instant 任务：`TaskControl._dispatch_reply_instant()`（`core/usecases/task_control.py:49-72`）创建 `_is_reply=True` 的 instant 任务落库并入队，走与普通任务完全相同的调度与执行链路。这样回复可重试、可恢复、不会丢消息。
+回复路径要解决的核心问题是：**任务结果如何可靠地送达用户**。agent 任务完成、instant 任务、失败消息都产生对外回复，如果各自直发，就无法统一重试、无法在插件重启后恢复。因此设计把回复拆成独立的 instant 任务：`TaskControl._dispatch_reply_instant()`（`core/usecases/task_control.py:49-72`）创建经 `mark_as_reply()` 标记的 instant 任务落库并入队（键 `META_IS_REPLY`），走与普通任务完全相同的调度与执行链路。这样回复可重试、可恢复、不会丢消息。
 
 ### 回复路径流程
 
@@ -270,7 +270,7 @@ Agent 循环完成 / Instant 任务
 │ _dispatch_reply_instant()          │  task_control.py:49-72
 │  创建 PENDING instant 任务          │
 │  stream_id = task.reply_target     │
-│  metadata["_is_reply"] = True      │
+│  mark_as_reply()                   │
 └───────────────┬────────────────────┘
                 │
                 ▼
@@ -323,7 +323,7 @@ Agent 循环完成 / Instant 任务
 
 1. 从 stream_id 提取 platform 前缀，拼接 `platform:user_id` 完整 owner
 2. 查询该 stream 下 WAITING_INPUT 且 owner 匹配的任务（owner 精确比较）
-3. 写入 `metadata["_user_reply"]`，经命令总线发送 `RESUME_REPLY` 唤醒等待中的 AgentLoop
+3. 经 `set_user_reply()` 写入回复，然后经命令总线发送 `RESUME_REPLY` 唤醒等待中的 AgentLoop
 4. 单次只唤醒第一个匹配任务
 
 ### 相关文档
