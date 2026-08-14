@@ -47,7 +47,7 @@ def _make_registry() -> ToolRegistry:
     reg = ToolRegistry()
     for name in sorted(_EXCLUDED_NAMES):
         reg.register(ToolDefinition(name=name, description="x", parameters={}, handler=_ok_handler))
-    for name in ["call_plugin_api", "mcp_fetch_page", "search_memory", "fetch_history", "read_file", "write_file"]:
+    for name in ["call_plugin_api", "mcp_fetch_page", "search_memory", "fetch_history", "read", "write"]:
         reg.register(ToolDefinition(name=name, description="x", parameters={}, handler=_ok_handler))
     reg.register(
         ToolDefinition(
@@ -91,7 +91,7 @@ def _schema_names(ctx) -> set[str]:
 def test_default_set_excludes_8_names_and_call_prefix() -> None:
     """USER 角色下默认集 = 信息+文件+MCP，不含 8 个排除名与 call_ 前缀。"""
     names = _default_tool_names(Role.USER)
-    assert names == {"search_memory", "fetch_history", "read_file", "write_file", "mcp_fetch_page"}
+    assert names == {"search_memory", "fetch_history", "read", "write", "mcp_fetch_page"}
     assert names.isdisjoint(_EXCLUDED_NAMES)
     assert not any(n.startswith("call_") for n in names)
     # 不含 admin 专用工具（USER 不可见）
@@ -158,7 +158,7 @@ async def test_single_happy_default_set_roundtrip(mock_ctx, prompt_service) -> N
     assert result["error"] is None
     # 子循环收到的工具集 = 默认允许集（无排除名 / call_ 前缀）
     assert _schema_names(mock_ctx) == {
-        "search_memory", "fetch_history", "read_file", "write_file", "mcp_fetch_page"
+        "search_memory", "fetch_history", "read", "write", "mcp_fetch_page"
     }
 
 

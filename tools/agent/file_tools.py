@@ -16,7 +16,11 @@
   1. ``Path(path).expanduser().resolve()`` — 始终在检查前先解析。
   2. 目标不存在但其祖先目录存在 → 允许（用于写入场景）。
   3. 完全无法解析的路径（无任何祖先存在）→ 拒绝。
-  4. 已有路径的存在性检查在 I/O 时进行（读: is_file，写: mkdir）。
+  4. 已有路径的存在性检查在 I/O 时进行（读: is_dir/is_file，写: mkdir）。
+
+目录能力：
+  read 的目标为目录时，返回目录条目列表（增强的"列目录"能力，
+  不单独提供 list_dir 工具）；write 目标为目录时给出明确指引。
 """
 
 from __future__ import annotations
@@ -24,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 
 from ...permission import Role
@@ -34,6 +39,7 @@ logger = logging.getLogger(__name__)
 # ── 常量 ─────────────────────────────────────────────────────────────────────
 
 _READ_LIMIT_BYTES: int = 200 * 1024  # 读取上限 200 KB
+_LIST_DIR_LIMIT: int = 200  # 单次列目录最多返回的条目数
 
 
 def _log_path(path: str | Path) -> str:
@@ -42,6 +48,54 @@ def _log_path(path: str | Path) -> str:
         return Path(path).name or "<空>"
     except (TypeError, ValueError):
         return "<无效路径>"
+
+
+def _list_directory(path: Path, limit: int = _LIST_DIR_LIMIT) -> dict[str, object]:
+    """列出目录条目（目录优先、名称排序），供 read 目录场景使用。
+
+    Args:
+        path: 已解析并校验过的目录路径。
+        limit: 返回条目数上限，防止超大目录一次性撑爆上下文。
+
+    Returns:
+        成功：``{"success": True, "path", "is_dir", "count", "entries", ...}``；
+        失败：``{"success": False, "error"}``。
+    """
+    try:
+        entries: list[dict[str, object]] = []
+        truncated = False
+        for child in sorted(path.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
+            if len(entries) >= limit:
+                truncated = True
+                break
+            try:
+                st = child.stat()
+            except OSError:
+                st = None
+            entries.append(
+                {
+                    "name": child.name,
+                    "type": "dir" if child.is_dir() else "file",
+                    "size_bytes": st.st_size if st else None,
+                    "mtime": datetime.fromtimestamp(st.st_mtime).isoformat() if st else None,
+                }
+            )
+        result: dict[str, object] = {
+            "success": True,
+            "path": str(path),
+            "is_dir": True,
+            "count": len(entries),
+            "entries": entries,
+        }
+        if truncated:
+            result["note"] = f"条目超过 {limit} 条，仅返回前 {limit} 条"
+        return result
+    except PermissionError:
+        logger.exception("read 列目录失败：无权限，dir=%s", _log_path(path))
+        return {"success": False, "error": f"无权限读取目录: {path}"}
+    except OSError as exc:
+        logger.exception("read 列目录失败：dir=%s, error=%s", _log_path(path), exc)
+        return {"success": False, "error": f"读取目录失败: {exc}"}
 
 
 # ── FileAccessPolicy：文件访问策略 ───────────────────────────────────────────
@@ -96,7 +150,7 @@ class FileAccessPolicy:
                 if parent == check:  # 已到达文件系统根
                     return False, f"路径不存在（无法解析到有效目录）: {raw}"
                 check = parent
-            # 至少有一个祖先存在 — 允许用于创建（write_file 场景）。
+            # 至少有一个祖先存在 — 允许用于创建（write 场景）。
 
         # ── admin：不受限（当 admin_open=True 时） ────────────────────────
         if role is Role.ADMIN:
@@ -142,7 +196,7 @@ def build_file_tools(
     admin_open: bool = True,
     role_provider: Callable[[], Role] | None = None,
 ) -> list[ToolDefinition]:
-    """创建 read_file / write_file 工具，由沙箱策略门控。
+    """创建 read / write 工具，由沙箱策略门控。
 
     Args:
         ctx: MaiBot 插件上下文（保留供未来使用，例如日志 / 配置访问）。
@@ -172,39 +226,42 @@ def build_file_tools(
     else:
         _rp = role_provider
 
-    # ── read_file 处理器 ───────────────────────────────────────────────────
+    # ── read 处理器 ───────────────────────────────────────────────────
 
-    async def read_file_handler(**kwargs: object) -> dict[str, object]:
+    async def read_handler(**kwargs: object) -> dict[str, object]:
         path_str = kwargs.get("path")
         if not isinstance(path_str, str):
-            logger.warning("read_file 参数校验失败：path 缺失或非字符串")
+            logger.warning("read 参数校验失败：path 缺失或非字符串")
             return {"success": False, "error": "缺少必需参数: path (string)"}
 
         role: Role = _rp()
-        logger.debug("read_file 调用：file=%s, role=%s", _log_path(path_str), role.value)
+        logger.debug("read 调用：file=%s, role=%s", _log_path(path_str), role.value)
         ok: bool
         result: Path | str
         ok, result = policy.resolve(role, path_str)
         if not ok:
-            logger.warning("read_file 沙箱校验拒绝：role=%s, file=%s", role.value, _log_path(path_str))
+            logger.warning("read 沙箱校验拒绝：role=%s, file=%s", role.value, _log_path(path_str))
             return {"success": False, "error": str(result)}
 
         resolved: Path = result  # type: ignore[assignment]
 
         def _read() -> dict[str, object]:
+            # 目标为目录 → 列出目录条目（增强的"列目录"能力，替代独立 list_dir 工具）
+            if resolved.is_dir():
+                return _list_directory(resolved)
             try:
                 raw_bytes = resolved.read_bytes()
             except PermissionError:
-                logger.exception("read_file 读取失败：无权限，file=%s", _log_path(resolved))
+                logger.exception("read 读取失败：无权限，file=%s", _log_path(resolved))
                 return {"success": False, "error": f"无权限读取: {resolved}"}
             except IsADirectoryError:
-                logger.exception("read_file 读取失败：目标为目录，file=%s", _log_path(resolved))
+                logger.exception("read 读取失败：目标为目录，file=%s", _log_path(resolved))
                 return {"success": False, "error": f"是一个目录，非文件: {resolved}"}
             except OSError as exc:
-                logger.exception("read_file 读取失败：file=%s, error=%s", _log_path(resolved), exc)
+                logger.exception("read 读取失败：file=%s, error=%s", _log_path(resolved), exc)
                 return {"success": False, "error": f"读取失败: {exc}"}
 
-            logger.debug("read_file 读取成功：file=%s, size=%d", _log_path(resolved), len(raw_bytes))
+            logger.debug("read 读取成功：file=%s, size=%d", _log_path(resolved), len(raw_bytes))
             if len(raw_bytes) > _READ_LIMIT_BYTES:
                 content = raw_bytes[:_READ_LIMIT_BYTES].decode("utf-8", errors="replace")
                 return {
@@ -220,21 +277,21 @@ def build_file_tools(
 
         return await asyncio.to_thread(_read)
 
-    # ── write_file 处理器 ──────────────────────────────────────────────────
+    # ── write 处理器 ──────────────────────────────────────────────────
 
-    async def write_file_handler(**kwargs: object) -> dict[str, object]:
+    async def write_handler(**kwargs: object) -> dict[str, object]:
         path_str = kwargs.get("path")
         content = kwargs.get("content")
         if not isinstance(path_str, str):
-            logger.warning("write_file 参数校验失败：path 缺失或非字符串")
+            logger.warning("write 参数校验失败：path 缺失或非字符串")
             return {"success": False, "error": "缺少必需参数: path (string)"}
         if not isinstance(content, str):
-            logger.warning("write_file 参数校验失败：content 缺失或非字符串")
+            logger.warning("write 参数校验失败：content 缺失或非字符串")
             return {"success": False, "error": "缺少必需参数: content (string)"}
 
         role: Role = _rp()
         logger.debug(
-            "write_file 调用：file=%s, role=%s, size=%d",
+            "write 调用：file=%s, role=%s, size=%d",
             _log_path(path_str),
             role.value,
             len(content.encode("utf-8")),
@@ -243,7 +300,7 @@ def build_file_tools(
         result: Path | str
         ok, result = policy.resolve(role, path_str)
         if not ok:
-            logger.warning("write_file 沙箱校验拒绝：role=%s, file=%s", role.value, _log_path(path_str))
+            logger.warning("write 沙箱校验拒绝：role=%s, file=%s", role.value, _log_path(path_str))
             return {"success": False, "error": str(result)}
 
         resolved: Path = result  # type: ignore[assignment]
@@ -253,16 +310,16 @@ def build_file_tools(
                 resolved.parent.mkdir(parents=True, exist_ok=True)
                 resolved.write_text(content, encoding="utf-8")
             except PermissionError:
-                logger.exception("write_file 写入失败：无权限，file=%s", _log_path(resolved))
+                logger.exception("write 写入失败：无权限，file=%s", _log_path(resolved))
                 return {"success": False, "error": f"无权限写入: {resolved}"}
             except IsADirectoryError:
-                logger.exception("write_file 写入失败：目标为目录，file=%s", _log_path(resolved))
+                logger.exception("write 写入失败：目标为目录，file=%s", _log_path(resolved))
                 return {"success": False, "error": f"是一个目录，无法覆盖写入: {resolved}"}
             except OSError as exc:
-                logger.exception("write_file 写入失败：file=%s, error=%s", _log_path(resolved), exc)
+                logger.exception("write 写入失败：file=%s, error=%s", _log_path(resolved), exc)
                 return {"success": False, "error": f"写入失败: {exc}"}
             logger.debug(
-                "write_file 写入成功：file=%s, size=%d",
+                "write 写入成功：file=%s, size=%d",
                 _log_path(resolved),
                 len(content.encode("utf-8")),
             )
@@ -272,28 +329,37 @@ def build_file_tools(
 
     # ── 工具定义 ───────────────────────────────────────────────────────────
 
-    logger.info("文件工具构建完成：read_file / write_file（admin_open=%s）", admin_open)
+    logger.info("文件工具构建完成：read / write（admin_open=%s）", admin_open)
     return [
         ToolDefinition(
-            name="read_file",
-            description="读取指定路径的文件内容（UTF-8 文本）。文件最大 200 KB，超出部分截断。",
+            name="read",
+            description=(
+                "读取指定路径的文件内容（UTF-8 文本）；若路径是目录，则返回该目录的"
+                "条目列表（名称、类型、大小、修改时间）。文件最大 200 KB，超出部分截断。"
+            ),
             parameters={
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "要读取的文件路径（绝对路径或相对于 user workspace 的路径）。",
+                        "description": (
+                            "要读取的文件或目录路径（绝对路径或相对于 user workspace 的路径）；"
+                            "目录路径返回目录条目列表。"
+                        ),
                     },
                 },
                 "required": ["path"],
             },
-            handler=read_file_handler,
+            handler=read_handler,
             visibility="discoverable",
             min_role=Role.USER,
         ),
         ToolDefinition(
-            name="write_file",
-            description="将内容写入指定路径的文件（UTF-8 编码）。父目录不存在时自动创建。",
+            name="write",
+            description=(
+                "将内容写入指定路径的文件（UTF-8 编码）。父目录不存在时自动创建；"
+                "目标是目录时返回错误（如需查看目录内容请用 read 读取该目录路径）。"
+            ),
             parameters={
                 "type": "object",
                 "properties": {
@@ -308,7 +374,7 @@ def build_file_tools(
                 },
                 "required": ["path", "content"],
             },
-            handler=write_file_handler,
+            handler=write_handler,
             visibility="discoverable",
             min_role=Role.USER,
         ),

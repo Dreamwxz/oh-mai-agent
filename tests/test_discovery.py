@@ -24,7 +24,7 @@ from oh_mai_agent.tools.synthetic.discovery import (
 def registry() -> ToolRegistry:
     reg = ToolRegistry()
     reg.register(ToolDefinition(
-        name="read_file",
+        name="read",
         description="读取文件",
         parameters={},
         handler=AsyncMock(return_value={"success": True}),
@@ -54,7 +54,7 @@ class TestHandleListTools:
         result = await handle_list_tools(registry, Role.USER)
         assert result["success"] is True
         names = {t["name"] for t in result["tools"]}
-        assert names == {"read_file"}  # essential 工具不出现
+        assert names == {"read"}  # essential 工具不出现
         assert result["tools"][0]["description"] == "读取文件"
 
     @pytest.mark.asyncio
@@ -77,10 +77,10 @@ class TestHandleGetToolSchema:
     @pytest.mark.asyncio
     async def test_success_loads_schema(self, registry: ToolRegistry) -> None:
         loaded: set[str] = set()
-        result = await handle_get_tool_schema(registry, loaded, Role.USER, "read_file")
+        result = await handle_get_tool_schema(registry, loaded, Role.USER, "read")
         assert result["success"] is True
-        assert result["schema"]["function"]["name"] == "read_file"
-        assert "read_file" in loaded
+        assert result["schema"]["function"]["name"] == "read"
+        assert "read" in loaded
 
     @pytest.mark.asyncio
     async def test_unknown_tool_returns_error(self, registry: ToolRegistry) -> None:
@@ -96,7 +96,7 @@ class TestHandleGetToolSchema:
 
     @pytest.mark.asyncio
     async def test_permission_denied_for_guest(self, registry: ToolRegistry) -> None:
-        result = await handle_get_tool_schema(registry, set(), Role.GUEST, "read_file")
+        result = await handle_get_tool_schema(registry, set(), Role.GUEST, "read")
         assert result == {"success": False, "error": "permission denied"}
 
     @pytest.mark.asyncio
@@ -108,7 +108,7 @@ class TestHandleGetToolSchema:
 
         monkeypatch.setattr(registry, "get", _boom)
         with pytest.raises(RuntimeError, match="registry down"):
-            await handle_get_tool_schema(registry, set(), Role.USER, "read_file")
+            await handle_get_tool_schema(registry, set(), Role.USER, "read")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

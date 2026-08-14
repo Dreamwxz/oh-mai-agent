@@ -1,4 +1,4 @@
-"""tools/agent/file_tools.py — FileAccessPolicy 沙箱与 read_file / write_file 行为测试。
+"""tools/agent/file_tools.py — FileAccessPolicy 沙箱与 read / write 行为测试。
 
 此前仅 sandbox 集成测试覆盖 happy path；本文件补齐 guest 拒绝、
 路径逃逸、admin_open=False 回退、role_provider=None 兜底、>200KB 截断、
@@ -107,7 +107,7 @@ class TestFileAccessPolicy:
     def test_nonexistent_path_with_existing_ancestor_allowed_for_create(
         self, workspace: Path,
     ) -> None:
-        """文件不存在但祖先目录存在 → 允许（write_file 创建场景）。"""
+        """文件不存在但祖先目录存在 → 允许（write 创建场景）。"""
         ok, resolved = _policy(workspace).resolve(Role.USER, str(workspace / "deep" / "new" / "file.txt"))
         assert ok is True
         assert str(resolved).endswith("deep/new/file.txt")
@@ -120,7 +120,7 @@ class TestFileAccessPolicy:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# read_file
+# read
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class TestReadFile:
@@ -129,26 +129,26 @@ class TestReadFile:
         tools = _file_tools(workspace, role_provider=lambda: Role.USER)
         (workspace / "notes").mkdir(exist_ok=True)
         (workspace / "notes" / "a.txt").write_text("hello", encoding="utf-8")
-        result = await tools["read_file"].handler(path=str(workspace / "notes" / "a.txt"))
+        result = await tools["read"].handler(path=str(workspace / "notes" / "a.txt"))
         assert result == {"success": True, "content": "hello"}
 
     @pytest.mark.asyncio
     async def test_missing_path_param(self, workspace: Path) -> None:
         tools = _file_tools(workspace, role_provider=lambda: Role.USER)
-        result = await tools["read_file"].handler()
+        result = await tools["read"].handler()
         assert result == {"success": False, "error": "缺少必需参数: path (string)"}
 
     @pytest.mark.asyncio
     async def test_non_string_path_param(self, workspace: Path) -> None:
         tools = _file_tools(workspace, role_provider=lambda: Role.USER)
-        result = await tools["read_file"].handler(path=123)
+        result = await tools["read"].handler(path=123)
         assert result == {"success": False, "error": "缺少必需参数: path (string)"}
 
     @pytest.mark.asyncio
     async def test_sandbox_denied(self, workspace: Path, tmp_path: Path) -> None:
         (tmp_path / "secret.txt").write_text("x", encoding="utf-8")
         tools = _file_tools(workspace, role_provider=lambda: Role.USER)
-        result = await tools["read_file"].handler(path=str(tmp_path / "secret.txt"))
+        result = await tools["read"].handler(path=str(tmp_path / "secret.txt"))
         assert result["success"] is False
         assert "沙箱外" in result["error"]
 
@@ -156,7 +156,7 @@ class TestReadFile:
     async def test_guest_denied(self, workspace: Path) -> None:
         tools = _file_tools(workspace, role_provider=lambda: Role.GUEST)
         (workspace / "a.txt").write_text("x", encoding="utf-8")
-        result = await tools["read_file"].handler(path=str(workspace / "a.txt"))
+        result = await tools["read"].handler(path=str(workspace / "a.txt"))
         assert result["success"] is False
         assert "guest" in result["error"]
 
@@ -165,16 +165,31 @@ class TestReadFile:
         """role_provider 缺省 → GUEST → 全部拒绝（对测试安全）。"""
         tools = _file_tools(workspace)
         (workspace / "a.txt").write_text("x", encoding="utf-8")
-        result = await tools["read_file"].handler(path=str(workspace / "a.txt"))
+        result = await tools["read"].handler(path=str(workspace / "a.txt"))
         assert result["success"] is False
 
     @pytest.mark.asyncio
-    async def test_directory_read_returns_error(self, workspace: Path) -> None:
+    async def test_directory_read_lists_entries(self, workspace: Path) -> None:
+        """read 目标为目录时返回目录条目列表（列目录能力，目录优先排序）。"""
         tools = _file_tools(workspace, role_provider=lambda: Role.USER)
         (workspace / "sub").mkdir(exist_ok=True)
-        result = await tools["read_file"].handler(path=str(workspace / "sub"))
-        assert result["success"] is False
-        assert "目录" in result["error"]
+        (workspace / "sub" / "a.txt").write_text("x", encoding="utf-8")
+        (workspace / "sub" / "inner").mkdir(exist_ok=True)
+        (workspace / "sub" / "b.txt").write_text("yy", encoding="utf-8")
+        result = await tools["read"].handler(path=str(workspace / "sub"))
+        assert result["success"] is True
+        assert result["is_dir"] is True
+        assert result["path"] == str((workspace / "sub").resolve())
+        names = [e["name"] for e in result["entries"]]
+        assert set(names) == {"a.txt", "b.txt", "inner"}
+        types = {e["name"]: e["type"] for e in result["entries"]}
+        assert types["inner"] == "dir"
+        assert types["a.txt"] == "file"
+        # 目录优先排序：inner 应排在两个文件之前
+        assert names[0] == "inner"
+        # 文件条目带大小
+        by_name = {e["name"]: e for e in result["entries"]}
+        assert by_name["a.txt"]["size_bytes"] == 1
 
     @pytest.mark.asyncio
     async def test_large_file_truncated(self, workspace: Path) -> None:
@@ -182,7 +197,7 @@ class TestReadFile:
         tools = _file_tools(workspace, role_provider=lambda: Role.USER)
         big = "x" * (_READ_LIMIT_BYTES + 1024)
         (workspace / "big.txt").write_text(big, encoding="utf-8")
-        result = await tools["read_file"].handler(path=str(workspace / "big.txt"))
+        result = await tools["read"].handler(path=str(workspace / "big.txt"))
         assert result["success"] is True
         assert result["truncated"] is True
         assert result["original_size_bytes"] == len(big)
@@ -190,14 +205,14 @@ class TestReadFile:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# write_file
+# write
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class TestWriteFile:
     @pytest.mark.asyncio
     async def test_write_creates_parent_dirs(self, workspace: Path) -> None:
         tools = _file_tools(workspace, role_provider=lambda: Role.USER)
-        result = await tools["write_file"].handler(
+        result = await tools["write"].handler(
             path=str(workspace / "sub" / "dir" / "f.txt"), content="hi",
         )
         assert result["success"] is True
@@ -206,20 +221,20 @@ class TestWriteFile:
     @pytest.mark.asyncio
     async def test_missing_params(self, workspace: Path) -> None:
         tools = _file_tools(workspace, role_provider=lambda: Role.USER)
-        assert (await tools["write_file"].handler())["success"] is False
-        assert (await tools["write_file"].handler(path="a.txt"))["success"] is False
+        assert (await tools["write"].handler())["success"] is False
+        assert (await tools["write"].handler(path="a.txt"))["success"] is False
 
     @pytest.mark.asyncio
     async def test_write_to_directory_returns_error(self, workspace: Path) -> None:
         tools = _file_tools(workspace, role_provider=lambda: Role.USER)
-        result = await tools["write_file"].handler(path=str(workspace), content="x")
+        result = await tools["write"].handler(path=str(workspace), content="x")
         assert result["success"] is False
         assert "目录" in result["error"]
 
     @pytest.mark.asyncio
     async def test_sandbox_denied(self, workspace: Path, tmp_path: Path) -> None:
         tools = _file_tools(workspace, role_provider=lambda: Role.USER)
-        result = await tools["write_file"].handler(
+        result = await tools["write"].handler(
             path=str(tmp_path / "outside.txt"), content="x",
         )
         assert result["success"] is False
@@ -228,5 +243,5 @@ class TestWriteFile:
     @pytest.mark.asyncio
     async def test_guest_denied(self, workspace: Path) -> None:
         tools = _file_tools(workspace, role_provider=lambda: Role.GUEST)
-        result = await tools["write_file"].handler(path=str(workspace / "a.txt"), content="x")
+        result = await tools["write"].handler(path=str(workspace / "a.txt"), content="x")
         assert result["success"] is False

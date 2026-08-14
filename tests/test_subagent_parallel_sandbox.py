@@ -7,8 +7,8 @@
       内经 ask_subagent 写入 user 沙箱目录；越界写被 FileAccessPolicy 拒绝。
   (c) 角色继承：role_provider 解析出 ADMIN 时子 Agent 可写沙箱外路径；
       USER 角色时被拒。
-  (d) 工具覆盖校验：ask_subagent(tools=["read_file"]) 时子循环 schema 仅含
-      read_file。
+  (d) 工具覆盖校验：ask_subagent(tools=["read"]) 时子循环 schema 仅含
+      read。
   (e) 批量并行：ask_subagents 3 个独立 SubAgentLoop 真并发（互锁 Event 断言
       执行区间两两重叠），合并答案按 intents 顺序、total_rounds=3，主循环
       下一轮 LLM 调用 messages 含全部 3 个答案。
@@ -252,7 +252,7 @@ def _write_file_call(path: str, content: str, call_id: str = "sc1") -> dict:
     return {
         "id": call_id,
         "function": {
-            "name": "write_file",
+            "name": "write",
             "arguments": json.dumps(
                 {"path": path, "content": content}, ensure_ascii=False,
             ),
@@ -363,7 +363,7 @@ class TestFileWriteSandbox:
                 "response": "派发子Agent",
                 "tool_calls": [_ask_subagent_call("写入文件 hello.txt")],
             },
-            2: {  # 子循环第 1 轮：write_file 写入沙箱内
+            2: {  # 子循环第 1 轮：write 写入沙箱内
                 "success": True,
                 "response": "",
                 "tool_calls": [_write_file_call(str(ws_file), content)],
@@ -380,7 +380,7 @@ class TestFileWriteSandbox:
         assert ws_file.exists()
         assert ws_file.read_text(encoding="utf-8") == content
 
-        # 子循环第 2 轮 LLM 收到 write_file 工具结果（id 对应正确）
+        # 子循环第 2 轮 LLM 收到 write 工具结果（id 对应正确）
         sub_r2 = mock_ctx.llm.call_history[2]
         sub_tool = _tool_msgs(sub_r2["prompt"])
         assert len(sub_tool) == 1
@@ -413,9 +413,9 @@ class TestFileWriteSandbox:
         await store.save(task)
 
         def echo_tool_result(prompt: list) -> dict:
-            # 子循环第 2 轮：把 write_file 的工具结果回显为答案
+            # 子循环第 2 轮：把 write 的工具结果回显为答案
             msgs = _tool_msgs(prompt)
-            assert msgs, "子循环第 2 轮应收到 write_file 工具结果"
+            assert msgs, "子循环第 2 轮应收到 write 工具结果"
             return {
                 "success": True,
                 "response": msgs[-1]["content"],  # 结果 JSON 原样回显
@@ -513,7 +513,7 @@ class TestRoleInheritance:
 
         def echo_tool_result(prompt: list) -> dict:
             msgs = _tool_msgs(prompt)
-            assert msgs, "子循环第 2 轮应收到 write_file 工具结果"
+            assert msgs, "子循环第 2 轮应收到 write 工具结果"
             return {
                 "success": True,
                 "response": msgs[-1]["content"],
@@ -546,7 +546,7 @@ class TestRoleInheritance:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# (d) 工具覆盖校验 — tools=["read_file"] 时 schema 仅含 read_file
+# (d) 工具覆盖校验 — tools=["read"] 时 schema 仅含 read
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
@@ -555,23 +555,23 @@ class TestToolsetOverride:
     async def test_override_schema_contains_only_requested_tool(
         self, mock_ctx: MockCtx, prompt_service: Any,
     ) -> None:
-        """ask_subagent(tools=["read_file"]) → 子循环 schema 仅含 read_file。"""
+        """ask_subagent(tools=["read"]) → 子循环 schema 仅含 read。"""
         reg = ToolRegistry()
-        reg.register(_make_tool("read_file", _ok_handler))
-        reg.register(_make_tool("write_file", _ok_handler))
+        reg.register(_make_tool("read", _ok_handler))
+        reg.register(_make_tool("write", _ok_handler))
         _register_subagent_tools(reg, mock_ctx, prompt_service, lambda: Role.USER)
 
         mock_ctx.llm.set_tool_response("文件内容：hello")
         result = await reg.execute(
             "ask_subagent", Role.USER,
-            intent="读取文件", tools=["read_file"],
+            intent="读取文件", tools=["read"],
         )
         assert result["success"] is True
         assert result["answer"] == "文件内容：hello"
-        # 唯一一次 LLM 调用（子循环）的 tools 参数仅含 read_file
+        # 唯一一次 LLM 调用（子循环）的 tools 参数仅含 read
         assert len(mock_ctx.llm.call_history) == 1
         schema_names = {t["function"]["name"] for t in mock_ctx.llm.call_history[0]["tools"]}
-        assert schema_names == {"read_file"}
+        assert schema_names == {"read"}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

@@ -100,7 +100,7 @@ async def _schemas_for_role(
                 "type": "function",
                 "function": {
                     "name": "get_tool_schema",
-                    "arguments": json.dumps({"name": "read_file"}),
+                    "arguments": json.dumps({"name": "read"}),
                 },
             },
         ],
@@ -141,7 +141,7 @@ async def test_admin_agent_wiring_preserves_admin_tool_visibility(real_store: Ta
 
     names = await _schemas_for_role(manager, ctx, "qq:10001", Role.ADMIN)
 
-    assert {"ask_user", "send_message", "read_file"} <= names
+    assert {"ask_user", "send_message", "read"} <= names
 
 
 @pytest.mark.asyncio
@@ -156,7 +156,7 @@ async def test_user_agent_wiring_preserves_user_tool_visibility(real_store: Task
 
     names = await _schemas_for_role(manager, ctx, "qq:20001", Role.USER)
 
-    assert {"ask_user", "send_message", "read_file"} <= names
+    assert {"ask_user", "send_message", "read"} <= names
 
 
 @pytest.mark.asyncio
@@ -175,4 +175,4 @@ async def test_guest_agent_wiring_preserves_guest_tool_visibility(real_store: Ta
     assert "get_tool_schema" in names
     assert "ask_user" not in names
     assert "send_message" not in names
-    assert "read_file" not in names
+    assert "read" not in names

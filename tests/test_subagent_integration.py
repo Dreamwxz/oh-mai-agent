@@ -70,7 +70,7 @@ def registry(
       - 被排除（8 个精确名 + call_ 前缀）：ask_user / send_message /
         list_my_tasks / create_subtask / inject_task / list_plugin_tools /
         call_plugin_api
-      - 合法信息/文件/MCP 工具：search_memory / read_file / mcp_search
+      - 合法信息/文件/MCP 工具：search_memory / read / mcp_search
       - ask_subagent 自身（防递归）
     """
     reg = ToolRegistry()
@@ -100,7 +100,7 @@ def registry(
         name="call_plugin_api", description="跨插件 API", parameters={"type": "object", "properties": {}},
         handler=_noop_handler, visibility="discoverable", min_role=Role.USER,
     ))
-    for name in ("search_memory", "read_file", "mcp_search"):
+    for name in ("search_memory", "read", "mcp_search"):
         reg.register(ToolDefinition(
             name=name, description=name, parameters={"type": "object", "properties": {}},
             handler=_noop_handler, visibility="discoverable", min_role=Role.USER,
@@ -228,7 +228,7 @@ class TestSubAgentSchemaExclusion:
         )
 
         # 合法工具仍在（信息/文件/MCP）
-        assert {"search_memory", "read_file", "mcp_search"} <= names
+        assert {"search_memory", "read", "mcp_search"} <= names
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

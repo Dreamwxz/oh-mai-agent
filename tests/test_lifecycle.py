@@ -117,7 +117,7 @@ class TestLoadPlugin:
         names = p._registry.all_names()
         for expected in (
             "list_my_tasks", "create_subtask", "inject_task",
-            "search_memory", "read_file", "ask_user", "send_message",
+            "search_memory", "read", "ask_user", "send_message",
         ):
             assert expected in names, f"工具 {expected} 未注册"
 
