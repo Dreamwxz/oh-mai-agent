@@ -1,4 +1,4 @@
-"""oh_mai_agent.core.task_manager 的测试 —— 任务创建与级别分类、
+"""oh_mai_agent.core.task_manager 的测试 —— 任务创建、
 按角色过滤任务列表、指令注入、取消、插件 API 工具。
 
 回归测试：
@@ -156,11 +156,10 @@ class TestCreateTask:
         assert saved is not None
 
     @pytest.mark.asyncio
-    async def test_create_task_with_llm_classification(
-        self, mock_ctx: MockCtx, manager: TaskManager,
+    async def test_create_task_defaults_to_agent_when_level_omitted(
+        self, manager: TaskManager,
     ) -> None:
-        """level 为 None 时由 LLM 分级；mock 返回 "ok" 未命中任何级别关键词，回退为 INSTANT。"""
-        # 默认 MockLLM.generate 返回 {"response": "ok"} → 未命中 instant/agent 关键词 → 回退为 INSTANT
+        """level 为 None 时不再 LLM 分级，固定默认 agent 级。"""
         ok, result = await manager.create_task(
             intent="多步骤复杂任务", owner="qq:1", platform="qq",
             stream_id="qq:1", level=None,
@@ -168,8 +167,7 @@ class TestCreateTask:
         )
         assert ok is True
         assert isinstance(result, TaskRecord)
-        # LLM 返回 "ok" → 未命中 instant/agent → 回退为 INSTANT
-        assert result.level == TaskLevel.INSTANT
+        assert result.level == TaskLevel.AGENT
 
     @pytest.mark.asyncio
     async def test_create_task_title_truncation(

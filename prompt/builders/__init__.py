@@ -4,7 +4,6 @@
 """
 
 from .agent_system import AgentSystemBuilder
-from .classify_level import ClassifyLevelBuilder
 from .context_note import ContextNoteBuilder
 from .injection import InjectionMessageBuilder
 from .planner_board import PlannerBoardBuilder
@@ -14,7 +13,6 @@ from .title import TitleBuilder
 
 ALL_BUILDERS: list = [
     AgentSystemBuilder(),
-    ClassifyLevelBuilder(),
     TitleBuilder(),
     PolishBuilder(),
     PlannerBoardBuilder(),

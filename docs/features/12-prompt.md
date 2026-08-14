@@ -2,7 +2,7 @@
 
 ## 设计目标
 
-提示词系统要解决的核心问题是：**LLM 提示词散落在代码里，改一处要翻遍整个插件**。Agent 循环的 system prompt、任务分级、标题生成、回复润色、Planner 看板、指令注入、动机小提示，这些场景都要向 LLM 喂不同的中文提示词。如果每个场景都在代码里用 f-string 或字符串常量手拼，提示词和逻辑就缠在一起：改文案要动代码，加场景要复制粘贴，提示词内容也无法被审查和测试。
+提示词系统要解决的核心问题是：**LLM 提示词散落在代码里，改一处要翻遍整个插件**。Agent 循环的 system prompt、标题生成、回复润色、Planner 看板、指令注入、动机小提示，这些场景都要向 LLM 喂不同的中文提示词。如果每个场景都在代码里用 f-string 或字符串常量手拼，提示词和逻辑就缠在一起：改文案要动代码，加场景要复制粘贴，提示词内容也无法被审查和测试。
 
 所以这个设计把「提示词内容」和「构建逻辑」彻底分开：**提示词文本全部收进 `prompt/templates/` 的模板文件，代码只负责按场景选模板、填变量**。这是一条硬规则——代码里禁止内联提示词（f-string、字符串常量、`lines.append` 手拼都不行），所有提示词必须经模板渲染。模板固定中文，不做 i18n。
 
@@ -20,12 +20,11 @@
 
 **基础设施（`prompt/base.py`）** 定义两个通用类型：`PromptContext` 是不可变数据类（`frozen=True, slots=True`），携带 `task` 引用与任意 `data` 键值参数字典（`base.py:21-32`）；`PromptBuilder` 是抽象基类，声明唯一 `name` 属性与 `build(ctx)` 方法，可选持有 `_pm` 引用（`base.py:35-65`）。builder 未注入 `_pm` 时 `build()` 抛 `RuntimeError`，无内置 fallback。
 
-**8 个 Builder（`prompt/builders/__init__.py` 的 `ALL_BUILDERS`）** 各管一个场景，对应 8 个模板：
+**7 个 Builder（`prompt/builders/__init__.py` 的 `ALL_BUILDERS`）** 各管一个场景，对应 7 个模板：
 
 | Builder | name | 场景 | 模板 |
 |---|---|---|---|
 | `AgentSystemBuilder` | `agent_system` | Agent 循环的 system prompt，注入任务标题与意图 | `agent_system.md` |
-| `ClassifyLevelBuilder` | `classify_level` | LLM 判定任务级别（instant / agent） | `classify_level.md` |
 | `TitleBuilder` | `title` | LLM 生成 15 字内标题 | `title.md` |
 | `PolishBuilder` | `polish` | 回复润色的 system prompt，注入聊天上下文、黑话表、原始结果 | `polish.md` |
 | `PlannerBoardBuilder` | `planner_board` | Planner 看板 XML 块，注入活跃/定时/最近任务 | `planner_board.md` |
@@ -45,7 +44,7 @@
 - **指令注入消费**：每轮 LLM 调用前 `_consume_injections()` 从 `metadata["_inject_queue"]` 弹出待注入指令，逐条经 `_build_injection_message()` 格式化为 system 消息插入，并落历史（`agent_loop.py:234-256`）。
 - **注入消息格式化**：`_build_injection_message()` 调用 `prompt_service.build("injection", instruction=...)`（`agent_loop.py:227-233`）。历史回放时 injection 条目同样重建为 system 消息，保证恢复后上下文一致（`agent_loop.py:390-394`）。
 
-其余 builder 的调用点：`classify_level` / `title` 在任务创建时（`lifecycle.py` 的 `llm_title` 与分级回调），`polish` 在 `PolishService.polish()`（`executor/instant.py`），`planner_board` 在 `PlannerBoard.build_summary()`（`planner_hooks.py:120`），`context_note` 在跨流回复补写动机注释（`executor/instant.py:596`）。
+其余 builder 的调用点：`title` 在任务创建时（`lifecycle.py` 的 `llm_title` 回调），`polish` 在 `PolishService.polish()`（`executor/instant.py`），`planner_board` 在 `PlannerBoard.build_summary()`（`planner_hooks.py:120`），`context_note` 在跨流回复补写动机注释（`executor/instant.py:596`）。
 
 **为什么 builder 不入插件主流程的 pydantic 配置**：提示词是内容不是参数，模板本身就是配置。把模板目录视为「提示词的配置节」，`index.json` 是其 schema——这比给每个提示词加配置项更简单，也让提示词与代码解耦得更彻底。
 
@@ -55,12 +54,11 @@
 
 提示词系统没有显式配置节——所有「配置」以模板文件形式存在。开发者与提示词交互的方式是**改模板、加模板、加 builder**。
 
-**模板清单（`prompt/templates/index.json`）** 声明 8 个模板，每个含 `path` 与 `variables`：
+**模板清单（`prompt/templates/index.json`）** 声明 7 个模板，每个含 `path` 与 `variables`：
 
 | 模板 | 变量 |
 |---|---|
 | `agent_system.md` | `title`, `intent` |
-| `classify_level.md` | `intent` |
 | `title.md` | `intent` |
 | `polish.md` | `context`, `jargon`, `result`, `kind`, `requester` |
 | `planner_board.md` | `session_id`, `active`, `scheduled`, `recent` |
@@ -70,7 +68,7 @@
 
 **新增一个提示词场景**的步骤：在 `prompt/templates/` 下创建 `.md` 模板（用 `{{var}}` 占位符）→ 在 `index.json` 注册 `path` 与 `variables` → 在 `prompt/builders/` 新建 builder 子类（声明 `name`、实现 `build(ctx)` 调 `self._pm.render()`）→ 在 `ALL_BUILDERS` 列表注册实例（`prompt/builders/__init__.py`）→ 调用方经 `prompt_service.build("xxx", ...)` 使用。模板变量声明必须与 `index.json` 一致，XML 转义在 builder 侧完成。
 
-**prompt_service 的消费方**：`AgentLoop`（agent_system / injection）、`TaskCrud` 的分级与标题回调（classify_level / title）、`PolishService`（polish）、`PlannerBoard`（planner_board）、`InstantExecutor` 的跨流回复（context_note）。它们都经 `lifecycle.py` 组装时注入的同一个 `prompt_service` 实例，保证全插件提示词走同一渲染入口。
+**prompt_service 的消费方**：`AgentLoop`（agent_system / injection）、`TaskCrud` 的标题回调（title）、`PolishService`（polish）、`PlannerBoard`（planner_board）、`InstantExecutor` 的跨流回复（context_note）。它们都经 `lifecycle.py` 组装时注入的同一个 `prompt_service` 实例，保证全插件提示词走同一渲染入口。
 
 **工具描述纪律**。工具描述（`ToolDefinition.description`）面向 LLM，与 JSON Schema（`parameters`）面向函数调用引擎分工不同。描述应告诉模型**何时用、为什么用、失败会怎样**（surface），禁止描述内部实现细节（machinery），如「调用 XX API」「查询 XX 表」。
 

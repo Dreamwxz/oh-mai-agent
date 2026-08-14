@@ -68,7 +68,6 @@ async def _schemas_for_role(
     owner: str,
     caller_role: Role,
 ) -> set[str]:
-    ctx.llm.set_generate_response("agent")
     ctx.llm.set_generate_response("wiring test task")
     ok, task_or_error = await manager.create_task(
         intent="run the wiring integration task",

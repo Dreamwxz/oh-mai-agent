@@ -6,7 +6,6 @@ import logging
 import uuid
 from collections.abc import Awaitable, Callable
 from datetime import datetime
-from typing import Any
 
 from ...config import MaibotAgentConfig
 from ...domain.status_formatter import StatusFormatter
@@ -29,9 +28,7 @@ class TaskCrud:
         resolver: PermissionResolver,
         sfmt: StatusFormatter,
         llm_title: Callable[[str], Awaitable[str]] | None,
-        prompt_service: Any,
         config: MaibotAgentConfig,
-        llm_generate: Callable[..., Awaitable[dict]] | None = None,
         inject_instruction: Callable[[str, str], Awaitable[bool]] | None = None,
     ) -> None:
         self._store = store
@@ -39,9 +36,7 @@ class TaskCrud:
         self._resolver = resolver
         self._sfmt = sfmt
         self._llm_title = llm_title
-        self._prompt_service = prompt_service
         self._config = config
-        self._llm_generate = llm_generate
         self._inject_instruction = inject_instruction
 
     def update_config(self, config: MaibotAgentConfig) -> None:
@@ -69,8 +64,10 @@ class TaskCrud:
             return False, "guest 无法创建任务"
 
         if level is None:
-            level = await self._classify_level(intent)
-        logger.info("任务「%s」的分级结果：%s", intent[:60], level.value)
+            # INSTANT 仅由定时任务与 Agent 内部显式创建（消息投递），
+            # 用户/API 入口未指定级别时默认 agent。
+            level = TaskLevel.AGENT
+        logger.info("任务「%s」的级别：%s", intent[:60], level.value)
 
         if self._llm_title is not None:
             try:
@@ -240,21 +237,3 @@ class TaskCrud:
             logger.info("拒绝查看任务 %s 历史：%s 无权访问（owner=%s）", resolved.id, owner, resolved.owner)
             return False, "权限不足：只能查看自己任务的历史"
         return True, await self._store.get_history(resolved.id, limit=limit)
-
-    async def _classify_level(self, intent: str) -> TaskLevel:
-        """Classify a task with the LLM, falling back to instant."""
-        prompt = self._prompt_service.build("classify_level", intent=intent)
-        if self._llm_generate is None:
-            return TaskLevel.INSTANT
-        try:
-            result = await self._llm_generate(prompt=prompt, model="utils", timeout_ms=120000)
-            response = result.get("response", "").strip().lower()
-            logger.debug("LLM 分级原始响应：%s", response[:100])
-            if "agent" in response or "planner" in response:
-                return TaskLevel.AGENT
-            if "instant" in response:
-                return TaskLevel.INSTANT
-            logger.warning("LLM 分级返回无法解析的响应：%s，降级为 INSTANT", response[:100])
-        except Exception as exc:
-            logger.warning("LLM 分级调用失败：%s，降级为 INSTANT", exc)
-        return TaskLevel.INSTANT

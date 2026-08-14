@@ -21,7 +21,7 @@ from typing import Any
 from .config import MaibotAgentConfig
 from .permission import PermissionResolver, Role
 from .core.task_manager import TaskManager
-from .domain.task_record import TaskLevel, TaskRecord, TaskStatus
+from .domain.task_record import TaskRecord, TaskStatus
 
 logger = logging.getLogger(__name__)
 
@@ -62,16 +62,6 @@ def _to_int(val: Any, default: int = 0) -> int:
         return int(val)
     except (TypeError, ValueError):
         return default
-
-
-def _parse_level(level_str: str | None) -> TaskLevel | None:
-    """将级别字符串解析为 TaskLevel，空字符串或非法值返回 None。"""
-    if not level_str:
-        return None
-    try:
-        return TaskLevel(str(level_str))
-    except ValueError:
-        return None
 
 
 def _parse_status(status_str: str | None) -> TaskStatus | None:
@@ -132,46 +122,38 @@ def build_api_handlers(
             owner (str): 任务所有者（必须由调用方提供）。
             platform (str): 平台标识符。
             stream_id (str): 目标聊天流 ID。
-            level (str, 可选): 执行级别（instant/agent）。省略时自动判定。
             delay_seconds (int, 可选): 执行前延迟的秒数。
             cron_expr (str, 可选): 定时任务 cron 表达式。
             priority (int, 可选): 任务优先级（数值越高越紧急）。
             reply_stream_id (str, 可选): 回复目标聊天流 ID
                 （缺省时回复到 stream_id 指定的流）。
+
+        注意：本端点不接受 ``level`` 参数——INSTANT 仅由定时任务与
+        Agent 模型显式创建，跨插件 API 创建的任务固定为 agent 级。
         """
         try:
             intent = str(kwargs.get("intent", ""))
             owner = str(kwargs.get("owner", ""))
             platform = str(kwargs.get("platform", ""))
             stream_id = str(kwargs.get("stream_id", ""))
-            level_str: str | None = kwargs.get("level")
             delay_seconds: int | None = _to_int(kwargs.get("delay_seconds")) or None
             cron_expr: str | None = kwargs.get("cron_expr")
             priority: int = _to_int(kwargs.get("priority", 0))
             reply_stream_id: str | None = kwargs.get("reply_stream_id")
 
             logger.debug(
-                "跨插件 API create 调用：owner=%s、platform=%s、stream_id=%s、level=%s、intent=%.80r",
+                "跨插件 API create 调用：owner=%s、platform=%s、stream_id=%s、intent=%.80r",
                 owner,
                 platform,
                 stream_id,
-                level_str,
                 intent,
             )
-            level = _parse_level(level_str)
-            if level_str and level is None:
-                logger.warning(
-                    "跨插件 API create 参数校验失败：无效级别 %s，合法值：instant/agent",
-                    level_str,
-                )
-                return {"success": False, "error": f"无效级别: {level_str}，合法值: instant/agent"}
 
             ok, result = await task_manager.create_task(
                 intent=intent,
                 owner=owner,
                 platform=platform,
                 stream_id=stream_id,
-                level=level,
                 delay_seconds=delay_seconds,
                 cron_expr=cron_expr,
                 priority=priority,

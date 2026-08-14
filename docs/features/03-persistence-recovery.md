@@ -45,7 +45,7 @@ sqlite 持久化存储与插件重启后的活跃任务恢复。所有任务记�
 
 每次状态变更都立即落盘，保证极端情况下最多丢失"变更后未写入"的一瞬。关键写点：
 
-- 任务创建：`TaskCrud.create_task` 完成分级与标题生成后落库，再入队。
+- 任务创建：`TaskCrud.create_task` 完成级别落定（未指定默认 agent）与标题生成后落库，再入队。
 - 状态转换：调度器每次 `transition()` / `force()` 后立即 `store.save(task)`。
 - Agent 循环：进入 RUNNING（agent_loop.py:373）、每轮结束（agent_loop.py:458-465）、ask_user 挂起（agent_loop.py:186）与恢复（agent_loop.py:220）。
 - 卸载兜底：`scheduler.stop()`（core/scheduler.py:100-147）把所有 RUNNING 任务 `force(PAUSED)` 落盘（scheduler.py:138-140）；`on_unload` 随后停 MCP、`store.close()`（plugin.py:50-66）。正常卸载不会留下 RUNNING 孤儿任务。

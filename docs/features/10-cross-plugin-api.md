@@ -17,9 +17,9 @@ MaiBot 的插件生态里，插件之间需要协作。oh-mai-agent 掌握着完
 
 `build_api_handlers(task_manager, resolver, config)`（`api_expose.py:87-416`）是暴露层的核心。它接收 TaskManager 门面、权限解析器和完整配置，返回 6 个端点描述符的列表，每个描述符包含 name / description / version / public / handler 五个字段。
 
-每个 handler 是 `async def _xxx(**kwargs)` 闭包，遵循同一套处理模式：从 kwargs 提取参数 → 类型安全转换（`_to_int`、`_parse_level`、`_parse_status`）→ 调用 TaskManager 门面方法 → 返回统一的 `{"success": bool, ...}` 结构，失败时附带 `"error"` 或 `"message"` 字段。以 create 为例（`api_expose.py:127-198`）：解析 intent / owner / platform / stream_id 等参数，校验 level 合法性，然后调用 `task_manager.create_task(...)`，成功返回 `{"success": True, "task_id": ..., "title": ..., "level": ...}`。
+每个 handler 是 `async def _xxx(**kwargs)` 闭包，遵循同一套处理模式：从 kwargs 提取参数 → 类型安全转换（`_to_int`、`_parse_status`）→ 调用 TaskManager 门面方法 → 返回统一的 `{"success": bool, ...}` 结构，失败时附带 `"error"` 或 `"message"` 字段。以 create 为例（`api_expose.py:127-198`）：解析 intent / owner / platform / stream_id 等参数，然后调用 `task_manager.create_task(...)`，成功返回 `{"success": True, "task_id": ..., "title": ..., "level": ...}`。create 端点不接受 `level` 参数——INSTANT 仅由定时任务与 Agent 模型显式创建，跨插件 API 创建的任务固定为 agent 级。
 
-参数处理是防御性的：所有关键参数经 `str()` 强制转字符串，数值参数经 `_to_int(val, default)` 安全转换，缺失时落到默认值（如 `limit` 默认 50）；`level` 为空时返回 `None`，由 TaskManager 自动判定任务级别；每个 handler 外层都有 `try/except Exception` 兜底，任意异常转为 `{"success": False, "error": str(exc)}`，不让异常穿透到 SDK 调用方。
+参数处理是防御性的：所有关键参数经 `str()` 强制转字符串，数值参数经 `_to_int(val, default)` 安全转换，缺失时落到默认值（如 `limit` 默认 50）；每个 handler 外层都有 `try/except Exception` 兜底，任意异常转为 `{"success": False, "error": str(exc)}`，不让异常穿透到 SDK 调用方。
 
 一个关键设计决策是 `_caller_role = Role.ADMIN`（`api_expose.py:124`）。所有 handler 都以 ADMIN 身份调用 TaskManager，因为跨插件调用被视为受信任的内部通信，不应被面向用户的 owner 权限检查阻拦。这个决策的代价是权限门控责任完全推给了外部调用方，而外部门控函数并未接入，详见已知限制。6 个端点描述符的 `"public"` 字段全部硬编码为 `True`（`api_expose.py:378/385/392/399/406/413`），意味着所有端点对 SDK 注册层无门槛可见。
 

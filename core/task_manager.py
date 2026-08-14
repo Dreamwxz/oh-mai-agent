@@ -1,6 +1,6 @@
 """MaiBot Agent 任务管理器 — 任务生命周期编排层。
 
-连接权限判定、调度器、Agent 循环、工具注册，提供任务创建（含 LLM 分级）、
+连接权限判定、调度器、Agent 循环、工具注册，提供任务创建、
 查询、修改（注入指令）、删除、历史等完整操作。
 
 TaskManager 核心 —— commands.py / plugin.py / api_expose.py 均依赖本模块。
@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 class TaskManager:
     """任务生命周期编排层。
 
-    连接权限判定、调度器、Agent 循环、工具注册，提供任务创建（含 LLM 分级）、
+    连接权限判定、调度器、Agent 循环、工具注册，提供任务创建、
     查询、修改（注入指令）、删除、历史等完整操作，是任务管理核心模块，
     commands.py / plugin.py / api_expose.py 均依赖本模块。
 
@@ -107,9 +107,7 @@ class TaskManager:
             resolver=resolver,
             sfmt=self._sfmt,
             llm_title=llm_title,
-            prompt_service=prompt_service,
             config=config,
-            llm_generate=ctx.llm.generate,
             inject_instruction=self.handle_injection,
         )
 
@@ -451,13 +449,6 @@ class TaskManager:
         if task is None:
             return Role.GUEST
         return self._make_role_provider(task)()
-
-    # ═══════════════════════════════════════════════════════════════════
-    # 内部：LLM 分级
-    # ═══════════════════════════════════════════════════════════════════
-
-    async def _classify_level(self, intent: str) -> TaskLevel:
-        return await self._crud._classify_level(intent)
 
     # ═══════════════════════════════════════════════════════════════════
     # 内部：ask 回调（发消息 + 日志）

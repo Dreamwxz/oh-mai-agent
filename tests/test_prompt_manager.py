@@ -59,12 +59,6 @@ class TestRender:
         assert "15 字以内" in result
         assert "{{" not in result
 
-    def test_render_classify_level(self, mgr: PromptManager) -> None:
-        result = mgr.render("classify_level", intent="帮我定时每天早上8点发送天气")
-        assert "帮我定时每天早上8点发送天气" in result
-        assert "instant" in result
-        assert "{{" not in result
-
 
 class TestValidation:
     """输入校验——缺失变量与多余变量。"""
@@ -92,7 +86,7 @@ class TestSnapshot:
     def test_snapshot_contains_all_templates(self, mgr: PromptManager) -> None:
         snap = mgr.snapshot()
         assert isinstance(snap, PromptSnapshot)
-        assert set(snap.templates.keys()) == {"agent_system", "classify_level", "title", "polish", "planner_board", "injection", "context_note", "subagent_system"}
+        assert set(snap.templates.keys()) == {"agent_system", "title", "polish", "planner_board", "injection", "context_note", "subagent_system"}
         for name, content in snap.templates.items():
             assert isinstance(content, str)
             assert len(content) > 0
@@ -113,7 +107,6 @@ class TestAllPlacholdersReplaced:
     def test_all_templates_render_fully(self, mgr: PromptManager) -> None:
         test_data = {
             "agent_system": {"title": "T", "intent": "I"},
-            "classify_level": {"intent": "I"},
             "title": {"intent": "I"},
             "polish": {"context": "C", "jargon": "J", "result": "R", "kind": "reply", "requester": ""},
         }

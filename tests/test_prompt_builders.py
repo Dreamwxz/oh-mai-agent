@@ -1,4 +1,4 @@
-"""oh_mai_agent.prompt.builders 的测试——全部 8 个 builder + PromptService 集成。"""
+"""oh_mai_agent.prompt.builders 的测试——全部 7 个 builder + PromptService 集成。"""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ from conftest import make_task
 from oh_mai_agent.prompt.base import PromptContext
 from oh_mai_agent.prompt.builders import ALL_BUILDERS
 from oh_mai_agent.prompt.builders.agent_system import AgentSystemBuilder
-from oh_mai_agent.prompt.builders.classify_level import ClassifyLevelBuilder
 from oh_mai_agent.prompt.builders.context_note import ContextNoteBuilder
 from oh_mai_agent.prompt.builders.injection import InjectionMessageBuilder
 from oh_mai_agent.prompt.builders.planner_board import PlannerBoardBuilder
@@ -60,28 +59,6 @@ class TestAgentSystemBuilder:
         prompt = svc.build("agent_system", task=task)
         assert "T" in prompt
         assert "I" in prompt
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# ClassifyLevelBuilder — 任务级别分类
-# ═══════════════════════════════════════════════════════════════════════════════
-
-class TestClassifyLevelBuilder:
-    def test_build_without_pm_raises(self) -> None:
-        builder = ClassifyLevelBuilder()
-        with pytest.raises(RuntimeError, match="PromptManager 未注入"):
-            builder.build(PromptContext(data={"intent": "定时发送天气"}))
-
-    def test_with_pm_renders_template(self, pm: PromptManager) -> None:
-        builder = ClassifyLevelBuilder(pm=pm)
-        prompt = builder.build(PromptContext(data={"intent": "test"}))
-        assert "test" in prompt
-        assert "任务级别说明" in prompt
-        assert "{{" not in prompt
-
-    def test_via_prompt_service(self, svc: PromptService) -> None:
-        prompt = svc.build("classify_level", intent="测试意图")
-        assert "测试意图" in prompt
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -350,16 +327,15 @@ class TestPromptService:
 
     def test_all_builders_registered(self, svc: PromptService) -> None:
         names = set(svc.builders.keys())
-        assert names == {"agent_system", "classify_level", "title", "polish", "planner_board", "injection", "context_note", "subagent_system"}
+        assert names == {"agent_system", "title", "polish", "planner_board", "injection", "context_note", "subagent_system"}
 
     def test_no_manager_builders_have_pm_injected(self, pm: PromptManager) -> None:
         from oh_mai_agent.prompt.builders import (
-            AgentSystemBuilder, ClassifyLevelBuilder, InjectionMessageBuilder,
+            AgentSystemBuilder, InjectionMessageBuilder,
             PlannerBoardBuilder, PolishBuilder, TitleBuilder,
         )
         fresh = [
             AgentSystemBuilder(),
-            ClassifyLevelBuilder(),
             TitleBuilder(),
             PolishBuilder(),
             PlannerBoardBuilder(),
@@ -370,7 +346,7 @@ class TestPromptService:
             assert builder._pm is pm
 
     def test_plain_service_build_without_manager_raises(self) -> None:
-        from oh_mai_agent.prompt.builders import ClassifyLevelBuilder
-        svc = PromptService(manager=None, builders=[ClassifyLevelBuilder()])
+        from oh_mai_agent.prompt.builders import TitleBuilder
+        svc = PromptService(manager=None, builders=[TitleBuilder()])
         with pytest.raises(RuntimeError, match="PromptManager 未注入"):
-            svc.build("classify_level", intent="测试")
+            svc.build("title", intent="测试")

@@ -14,7 +14,7 @@ MaiBot 的 Host 主流程负责实时聊天，不适合承载需要长时间推�
 
 ### 两级分类：TaskLevel 枚举
 
-`TaskLevel` 枚举（`domain/task_record.py:26-29`）定义两级任务：`instant` 和 `agent`。分级发生在任务创建时，由 LLM 按意图判定（见下文创建流程），执行时由 `ExecutorFactory` 按级分发到不同执行器。
+`TaskLevel` 枚举（`domain/task_record.py:26-29`）定义两级任务：`instant` 和 `agent`。级别在任务创建时落定——未显式指定时默认 agent，instant 仅由定时任务与 Agent 内部显式创建（见下文创建流程），执行时由 `ExecutorFactory` 按级分发到不同执行器。
 
 ### 数据模型：TaskRecord
 
@@ -66,7 +66,7 @@ cron 任务完成后经 `force()` 重置回 `scheduled` 等待下次触发（`co
 任务创建入口统一收敛到 `TaskManager` 门面（`core/task_manager.py:103` 实例化 TaskCrud、`:124` 实例化 TaskControl），实际逻辑在 `TaskCrud.create_task()`（`core/usecases/task_crud.py:51-99`）：
 
 1. guest 拦截：`PermissionResolver.require(caller_role, USER)`，guest 无权创建任务
-2. LLM 分级：`_classify_level()`（`core/usecases/task_crud.py:239-255`）按意图关键词判定 instant / agent，失败降级为 instant
+2. 级别落定：未显式指定 `level` 时默认 agent（INSTANT 仅由定时任务与 Agent 内部显式创建，用于消息投递）
 3. LLM 标题：生成任务标题，失败降级为 intent 前 40 字符
 4. 落库：构造 TaskRecord 写入 TaskStore
 5. 入队：`scheduler.enqueue()` 按触发方式调度（NOW 直接排队，DELAY/CRON 进入 scheduled）

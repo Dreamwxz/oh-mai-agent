@@ -177,7 +177,7 @@ class MaibotAgentPlugin(MaiBotPlugin):
             ToolParameterInfo(
                 name="level",
                 param_type=ToolParamType.STRING,
-                description="执行级别 instant/agent，不填自动判定",
+                description="执行级别 instant/agent，不填默认 agent；仅纯消息提醒类任务（定时发消息）用 instant",
                 enum_values=["instant", "agent"],
                 required=False,
             ),
@@ -353,7 +353,7 @@ class MaibotAgentPlugin(MaiBotPlugin):
             ToolParameterInfo(
                 name="level",
                 param_type=ToolParamType.STRING,
-                description="执行级别 instant/agent，不填自动判定",
+                description="执行级别 instant/agent，不填默认 agent；仅纯消息提醒类任务（定时发消息）用 instant",
                 enum_values=["instant", "agent"],
                 required=False,
             ),

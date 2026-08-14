@@ -36,9 +36,8 @@ user 级隔离到 `data_dir/files/`。api_expose 暴露 6 个跨插件端点
 （create/list/get/cancel/inject/history）。
 
 **提示词体系**。所有 prompt 经 PromptManager.render() / PromptService.build() 生成，模板在
-`prompt/templates/`（固定中文，无 i18n），builder 注册在 `prompt/builders/`（8 个：
-agent_system / classify_level / title / polish / planner_board / injection / context_note /
-subagent_system）。
+`prompt/templates/`（固定中文，无 i18n），builder 注册在 `prompt/builders/`（7 个：
+agent_system / title / polish / planner_board / injection / context_note / subagent_system）。
 
 **持久化**。TaskRecord（`domain/task_record.py`）是唯一可落库形态，JSON 序列化到 sqlite。
 运行时对象（queue、Event、AgentLoop 引用）绝不写入 metadata 落库。状态变更必须走
@@ -55,7 +54,7 @@ subagent_system）。
 |---|---|
 | [README.md](README.md) | 用户入口：安装 / 配置速查 / 命令用法 / 功能索引 |
 | [docs/](docs/) | LIFECYCLE 生命周期总览 + features/（15 份功能文档）+ history/（4 份归档） |
-| [tests/](tests/) | 测试：56 文件 1017 个测试函数，pytest 验证 0 失败（3 个 mcp_stdio 环境相关失败除外）+ 文档引用检查（test_doc_links.py） |
+| [tests/](tests/) | 测试：56 文件 1020 个测试函数，pytest 验证 0 失败（3 个 mcp_stdio 环境相关失败除外）+ 文档引用检查（test_doc_links.py） |
 
 **目录结构**（散文式，不用多级缩进树）：
 
@@ -68,9 +67,9 @@ subagent_system）。
 - `domain/`：领域模型与持久化，TaskRecord 状态机 + TaskStore + Recovery + StatusFormatter
 - `executor/`：执行层——AgentLoop 执行引擎（agent_loop.py）+ current_task 执行上下文（context.py）+ ExecutorFactory 按级分发 InstantExecutor（进程内）/ AgentExecutor
 - `tools/mcp/`：MCP 工具提供方，MCPConnection（stdio/http/sse）+ MCPManager + presets（内置 fetch/exa 预设）
-- `prompt/`：提示词系统，manager / service / base + builders/（8）+ templates/（8 中文模板）
+- `prompt/`：提示词系统，manager / service / base + builders/（7）+ templates/（7 中文模板）
 - `tools/`：工具系统三通道（agent 循环工具（含子 Agent 工具 `subagent_tool.py`）/ planner @Tool 工厂 / synthetic 发现工具）+ 发送工具共用实现 `tools/send_message.py` + MCP 工具提供方（tools/mcp/）
-- `tests/`：测试（56 文件，1017 测试函数，0 失败，mcp_stdio 3 个用例受环境限制）+ 文档引用检查（test_doc_links.py）
+- `tests/`：测试（56 文件，1020 测试函数，0 失败，mcp_stdio 3 个用例受环境限制）+ 文档引用检查（test_doc_links.py）
 - `docs/` + `data/`：功能文档（15 + LIFECYCLE + 4 归档）与运行时数据（gitignored）
 
 > 依赖方向：root（plugin.py/lifecycle.py 组装根）→ core（编排）→ executor（执行）→ {tools, prompt, bus} → domain
@@ -85,8 +84,8 @@ subagent_system）。
 
 ## 提示词硬性规则
 
-**禁止内联提示词**。LLM 提示词（系统提示、注入指令、上下文注释、看板、标题、润色、
-分级）必须经 `prompt/templates/` 模板渲染（`PromptManager.render()` /
+**禁止内联提示词**。LLM 提示词（系统提示、注入指令、上下文注释、看板、标题、润色）
+必须经 `prompt/templates/` 模板渲染（`PromptManager.render()` /
 `PromptService.build()`），**代码里禁止内联提示词**文本，包括 f-string 拼接、字符
 串常量、`lines.append` 手拼。
 
@@ -124,7 +123,7 @@ subagent_system）。
 uv run --with maibot-plugin-sdk pytest tests/ -q
 ```
 
-共 1017 个测试函数，pytest 验证 0 失败（mcp_stdio 3 个用例需可启动 MCP stdio 子进程，本环境不可用）。conftest 将项目根挂载为 `oh_mai_agent` 包。
+共 1020 个测试函数，pytest 验证 0 失败（mcp_stdio 3 个用例需可启动 MCP stdio 子进程，本环境不可用）。conftest 将项目根挂载为 `oh_mai_agent` 包。
 约定：mock LLM 和 transport，**不 mock 持久化**（使用 real_store 即真 sqlite）。
 
 **Lint / 类型检查**。项目未配置形式化 lint 或类型检查工具（`pyproject.toml` 中无

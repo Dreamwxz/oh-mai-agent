@@ -40,7 +40,7 @@ CRON 表达式非法时（`croniter` 抛 `ValueError`），任务直接标记 FA
 
 enqueue 对已处于 SCHEDULED 的任务幂等：跳过重复 transition（避免非法状态转换异常），仅刷新 `scheduled_at` 后落盘——这保证了重启恢复流程（对已落盘的 SCHEDULED 任务重新入队）无副作用；pending 队列按 id 去重，重复入队被忽略。
 
-`enqueue` 的调用方是 `TaskCrud.create_task()`（`task_crud.py:51-99`）：权限校验 → LLM 分级 → 标题生成 → 落库 → `scheduler.enqueue()`（`task_crud.py:94`）。`TaskManager.create_task` 只是门面转发，真正的创建逻辑在 usecase 层。
+`enqueue` 的调用方是 `TaskCrud.create_task()`（`task_crud.py:51-99`）：权限校验 → 级别落定（未显式指定时默认 agent，INSTANT 仅由定时任务与 Agent 内部显式创建）→ 标题生成 → 落库 → `scheduler.enqueue()`（`task_crud.py:94`）。`TaskManager.create_task` 只是门面转发，真正的创建逻辑在 usecase 层。
 
 ### 后台检查循环：每秒一次的心跳
 
