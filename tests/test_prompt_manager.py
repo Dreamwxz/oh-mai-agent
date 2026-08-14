@@ -45,7 +45,6 @@ class TestRender:
             context="[群聊记录: 用户A说了你好]",
             jargon="黑话1, 黑话2",
             result="这是原始回复内容",
-            kind="reply",
             requester="",
         )
         assert "用户A说了你好" in result
@@ -96,7 +95,7 @@ class TestAllPlacholdersReplaced:
         test_data = {
             "agent_system": {"title": "T", "intent": "I"},
             "title": {"intent": "I"},
-            "polish": {"context": "C", "jargon": "J", "result": "R", "kind": "reply", "requester": ""},
+            "polish": {"context": "C", "jargon": "J", "result": "R", "requester": ""},
         }
         for name, data in test_data.items():
             result = mgr.render(name, **data)

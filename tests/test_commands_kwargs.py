@@ -106,6 +106,9 @@ async def fake_store(real_store: TaskStore) -> TaskStore:
 
 @pytest.fixture
 def plugin(fake_store: TaskStore) -> MaibotAgentPlugin:
+    from oh_mai_agent.config import MaibotAgentConfig
+    from oh_mai_agent.executor.instant import ReplySender
+
     p = MaibotAgentPlugin()
     p._task_manager = FakeTaskManager(fake_store)
     p._sfmt = StatusFormatter()
@@ -115,6 +118,10 @@ def plugin(fake_store: TaskStore) -> MaibotAgentPlugin:
     mock_ctx = MockCtx()
     p._set_context(mock_ctx)
     p._mock_ctx = mock_ctx  # 暴露给 send.text 断言使用
+    # FakeTaskManager 注入真实 ReplySender（直发出口写回 mock_ctx._sent_messages）
+    p._task_manager.sender = ReplySender(
+        ctx=mock_ctx, config_getter=lambda: MaibotAgentConfig(),
+    )
     return p
 
 
@@ -649,39 +656,31 @@ class TestToolTaskCreateReplyStreamId:
 
 class TestCmdReplyUnifiedSend:
     @pytest.mark.asyncio
-    async def test_cmd_reply_sends_via_unified_entry_without_polish(
+    async def test_cmd_reply_sends_raw_without_polish(
         self, plugin: MaibotAgentPlugin,
     ) -> None:
-        """命令响应经统一发送入口（send_final_reply）直发，polish=False 不润色。"""
-        from unittest.mock import AsyncMock, patch
-
+        """命令响应经直发出口（ReplySender.send_raw）发送，不做润色。"""
         from oh_mai_agent import commands as commands_module
 
-        with patch(
-            "oh_mai_agent.executor.instant.send_final_reply",
-            new_callable=AsyncMock,
-        ) as send:
-            await commands_module.cmd_reply(plugin, "qq:group:123", "任务已创建 ID=t1")
+        await commands_module.cmd_reply(plugin, "qq:group:123", "任务已创建 ID=t1")
 
-        send.assert_awaited_once()
-        args, kwargs = send.call_args.args, send.call_args.kwargs
-        assert args[0] == "任务已创建 ID=t1"
-        assert args[1] == "qq:group:123"
-        assert kwargs["polish"] is False
+        sent = plugin._mock_ctx._sent_messages  # type: ignore[attr-defined]
+        assert sent and sent[0]["text"] == "任务已创建 ID=t1"
+        assert sent[0]["stream_id"] == "qq:group:123"
 
     @pytest.mark.asyncio
     async def test_cmd_reply_send_failure_swallowed(
         self, plugin: MaibotAgentPlugin,
     ) -> None:
         """命令响应发送失败时只打 warning，不向上抛。"""
-        from unittest.mock import patch
+        from unittest.mock import AsyncMock, patch
 
         from oh_mai_agent import commands as commands_module
 
-        async def _boom(*args: Any, **kwargs: Any) -> None:
-            raise RuntimeError("send failed")
-
-        with patch("oh_mai_agent.executor.instant.send_final_reply", _boom):
+        with patch.object(
+            plugin._task_manager.sender, "send_raw",
+            AsyncMock(side_effect=RuntimeError("send failed")),
+        ):
             await commands_module.cmd_reply(plugin, "qq:group:123", "响应")  # 不应抛异常
 
 

@@ -32,6 +32,7 @@ class TaskControl:
         prompt_manager: PromptManager | None,
         prompt_service: Any | None,
         ctx: Any,
+        sender: Any = None,
     ) -> None:
         self._store = store
         self._scheduler = scheduler
@@ -41,6 +42,7 @@ class TaskControl:
         self._prompt_manager = prompt_manager
         self._prompt_service = prompt_service
         self._ctx = ctx
+        self._sender = sender
 
     def update_config(self, config: MaibotAgentConfig) -> None:
         """Replace the configuration used when creating execution contexts."""
@@ -80,6 +82,7 @@ class TaskControl:
             config=self._config,
             prompt_manager=self._prompt_manager,
             prompt_service=self._prompt_service,
+            sender=self._sender,
         )
         await self._executor_factory.get(TaskLevel.INSTANT).execute(exec_ctx, task)
 

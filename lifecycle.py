@@ -91,6 +91,16 @@ async def load_plugin(plugin: "MaibotAgentPlugin") -> None:
     # 4.1. PromptService — builder 模式统一入口
     plugin._pm_service = PromptService(manager=plugin._pm, builders=ALL_BUILDERS)
 
+    # 4.2. ReplySender — 统一发送出口（直发 / 完整润色 + 上下文注释）
+    # config_getter 每次调用读取，配置热更新立即生效
+    from .executor.instant import ReplySender
+
+    plugin._sender = ReplySender(
+        ctx=plugin.ctx,
+        config_getter=lambda: plugin.config,
+        prompt_service=plugin._pm_service,
+    )
+
     # 5. 初始化 TaskManager
     plugin._task_manager = TaskManager(
         ctx=plugin.ctx,
@@ -104,6 +114,7 @@ async def load_plugin(plugin: "MaibotAgentPlugin") -> None:
         prompt_manager=plugin._pm,
         prompt_service=plugin._pm_service,
         command_bus=plugin._command_bus,
+        sender=plugin._sender,
     )
     plugin._executor_ref["tm"] = plugin._task_manager
     await plugin._task_manager.setup()

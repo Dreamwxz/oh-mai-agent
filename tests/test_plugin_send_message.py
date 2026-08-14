@@ -18,7 +18,9 @@ from oh_mai_agent.prompt.service import PromptService
 @pytest.fixture
 def plugin_with_ctx() -> MaibotAgentPlugin:
     from pathlib import Path
+    from types import SimpleNamespace
 
+    from oh_mai_agent.executor.instant import ReplySender
     from oh_mai_agent.prompt.manager import PromptManager
 
     p = MaibotAgentPlugin()
@@ -30,6 +32,11 @@ def plugin_with_ctx() -> MaibotAgentPlugin:
         builders=[ContextNoteBuilder()],
     )
     p._resolver = PermissionResolver(PermissionConfig())
+    # 提供 sender 供 _tool_send_message 懒构建 handler 时绑定（真实 ReplySender，直发写回 mock_ctx）
+    p._task_manager = SimpleNamespace(
+        sender=ReplySender(ctx=mock_ctx, config_getter=lambda: MaibotAgentConfig(),
+                           prompt_service=p._pm_service),
+    )
     return p
 
 
@@ -46,7 +53,7 @@ class TestToolSendMessageTwoAppends:
             pass
 
         with (
-            patch("oh_mai_agent.executor.instant.send_final_reply", _noop),
+            patch.object(plugin_with_ctx._task_manager.sender, "send_polished", _noop),
             patch.object(type(plugin_with_ctx), "config", new_callable=PropertyMock) as mock_cfg,
         ):
             mock_cfg.return_value = MaibotAgentConfig()
@@ -78,7 +85,7 @@ class TestToolSendMessageTwoAppends:
             pass
 
         with (
-            patch("oh_mai_agent.executor.instant.send_final_reply", _noop),
+            patch.object(plugin_with_ctx._task_manager.sender, "send_polished", _noop),
             patch.object(type(plugin_with_ctx), "config", new_callable=PropertyMock) as mock_cfg,
         ):
             mock_cfg.return_value = MaibotAgentConfig()
@@ -102,7 +109,7 @@ class TestToolSendMessageTwoAppends:
         plugin_ctx.maisaka.context.append = _append_raises  # type: ignore[assignment]
 
         with (
-            patch("oh_mai_agent.executor.instant.send_final_reply", _noop),
+            patch.object(plugin_with_ctx._task_manager.sender, "send_polished", _noop),
             patch.object(type(plugin_with_ctx), "config", new_callable=PropertyMock) as mock_cfg,
         ):
             mock_cfg.return_value = MaibotAgentConfig()
@@ -137,7 +144,7 @@ class TestToolSendMessageOpenSessionCalled:
             pass
 
         with (
-            patch("oh_mai_agent.executor.instant.send_final_reply", _noop),
+            patch.object(plugin_with_ctx._task_manager.sender, "send_polished", _noop),
             patch.object(type(plugin_with_ctx), "config", new_callable=PropertyMock) as mock_cfg,
         ):
             mock_cfg.return_value = MaibotAgentConfig()
@@ -172,7 +179,7 @@ class TestToolSendMessageOpenSessionCalled:
             pass
 
         with (
-            patch("oh_mai_agent.executor.instant.send_final_reply", _noop),
+            patch.object(plugin_with_ctx._task_manager.sender, "send_polished", _noop),
             patch.object(type(plugin_with_ctx), "config", new_callable=PropertyMock) as mock_cfg,
         ):
             mock_cfg.return_value = MaibotAgentConfig()
@@ -203,7 +210,7 @@ class TestToolSendMessageOpenSessionCalled:
 
         try:
             with (
-                patch("oh_mai_agent.executor.instant.send_final_reply", _noop),
+                patch.object(plugin_with_ctx._task_manager.sender, "send_polished", _noop),
                 patch.object(type(plugin_with_ctx), "config", new_callable=PropertyMock) as mock_cfg,
             ):
                 mock_cfg.return_value = MaibotAgentConfig()
@@ -239,7 +246,7 @@ class TestToolSendMessageAccountIdScope:
             pass
 
         with (
-            patch("oh_mai_agent.executor.instant.send_final_reply", _noop),
+            patch.object(plugin_with_ctx._task_manager.sender, "send_polished", _noop),
             patch.object(type(plugin_with_ctx), "config", new_callable=PropertyMock) as mock_cfg,
         ):
             mock_cfg.return_value = MaibotAgentConfig()
@@ -279,7 +286,7 @@ class TestToolSendMessageAccountIdScope:
             pass
 
         with (
-            patch("oh_mai_agent.executor.instant.send_final_reply", _noop),
+            patch.object(plugin_with_ctx._task_manager.sender, "send_polished", _noop),
             patch.object(type(plugin_with_ctx), "config", new_callable=PropertyMock) as mock_cfg,
         ):
             mock_cfg.return_value = MaibotAgentConfig()
@@ -306,7 +313,7 @@ class TestToolSendMessageAccountIdScope:
             pass
 
         with (
-            patch("oh_mai_agent.executor.instant.send_final_reply", _noop),
+            patch.object(plugin_with_ctx._task_manager.sender, "send_polished", _noop),
             patch.object(type(plugin_with_ctx), "config", new_callable=PropertyMock) as mock_cfg,
         ):
             mock_cfg.return_value = MaibotAgentConfig()
@@ -327,7 +334,7 @@ class TestToolSendMessageAccountIdScope:
             pass
 
         with (
-            patch("oh_mai_agent.executor.instant.send_final_reply", _noop),
+            patch.object(plugin_with_ctx._task_manager.sender, "send_polished", _noop),
             patch.object(type(plugin_with_ctx), "config", new_callable=PropertyMock) as mock_cfg,
         ):
             mock_cfg.return_value = MaibotAgentConfig()
@@ -356,7 +363,7 @@ class TestToolSendMessageAccountIdScope:
             pass
 
         with (
-            patch("oh_mai_agent.executor.instant.send_final_reply", _noop),
+            patch.object(plugin_with_ctx._task_manager.sender, "send_polished", _noop),
             patch.object(type(plugin_with_ctx), "config", new_callable=PropertyMock) as mock_cfg,
         ):
             mock_cfg.return_value = MaibotAgentConfig()

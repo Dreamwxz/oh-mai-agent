@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from ..executor.context import current_task, make_role_provider
+from ..executor.instant import ReplySender
 from ..config import MaibotAgentConfig
 from ..executor import ExecutionContext, ExecutorFactory
 from ..domain.status_formatter import StatusFormatter
@@ -74,6 +75,7 @@ class TaskManager:
         prompt_manager: PromptManager | None = None,
         prompt_service: Any | None = None,
         command_bus: Any,
+        sender: Any = None,
     ) -> None:
         """初始化任务管理器。
 
@@ -89,6 +91,7 @@ class TaskManager:
             prompt_manager: PromptManager 实例。
             prompt_service: PromptService 实例。
             command_bus: TaskCommandBus 实例。
+            sender: ReplySender 实例（统一发送出口）。
         """
         self._ctx = ctx
         self._store = store
@@ -102,6 +105,15 @@ class TaskManager:
         self._prompt_manager = prompt_manager
         self._prompt_service = prompt_service
         self._command_bus = command_bus
+        if sender is None:
+            # 缺省自举：用任务管理器持有的 ctx/config 构造标准发送器
+            # （config_getter 每次读取 self._config，热更新后自动生效）
+            sender = ReplySender(
+                ctx=ctx,
+                config_getter=lambda: self._config,
+                prompt_service=prompt_service,
+            )
+        self._sender = sender
         self._crud = TaskCrud(
             store=store,
             scheduler=scheduler,
@@ -130,7 +142,13 @@ class TaskManager:
             prompt_manager=prompt_manager,
             prompt_service=prompt_service,
             ctx=ctx,
+            sender=sender,
         )
+
+    @property
+    def sender(self) -> Any:
+        """统一发送出口（ReplySender），供命令层 / Planner 工具使用。"""
+        return self._sender
 
     def _make_exec_ctx(self) -> ExecutionContext:
         """用当前 TaskManager 状态构造 ExecutionContext。"""
@@ -141,6 +159,7 @@ class TaskManager:
             config=self._config,
             prompt_manager=self._prompt_manager,
             prompt_service=self._prompt_service,
+            sender=self._sender,
         )
 
     # ── 生命周期 ──────────────────────────────────────────────────────
@@ -189,21 +208,12 @@ class TaskManager:
             self._registry.register(tool)
 
         # ── 5. send_message 工具（升级版） ──────────────────────────
-        # send_polished 回调委托 send_final_reply 执行润色 + 指数退避重试发送，
-        # polish/split 可选项由 send_message 工具参数透传
-        from ..executor.instant import send_final_reply
-
+        # send_polished 回调绑定 ReplySender.send_polished（润色 + 分割 + 重试），
+        # relay_from（转达委托人）由 send_message 工具参数透传
         async def _send_polished(
-            text: str, stream_id: str, is_group: bool,
-            *, polish: bool = True, split: bool = True,
+            text: str, stream_id: str, *, relay_from: str | None = None,
         ) -> None:
-            await send_final_reply(
-                text, stream_id,
-                self._ctx, self._config, self._prompt_manager,
-                self._prompt_service,
-                max_retries=3, is_group=is_group,
-                polish=polish, split=split,
-            )
+            await self._sender.send_polished(text, stream_id, relay_from=relay_from)
 
         send_msg_tool = build_send_tool(
             self._ctx,
@@ -470,9 +480,9 @@ class TaskManager:
         """向用户提问的跨层回调。
 
         由 AgentLoop 的 on_ask 参数和 ask_tool 的 ask_callback 共用。
-        经统一发送入口（``send_final_reply``）润色后发送到目标聊天流 ——
+        经统一发送出口（``ReplySender.send_polished``）润色后发送到目标聊天流 ——
         提问也走"更像人"的润色链路，与任务回复共享同一套可靠性保障
-        （指数退避重试 + 静默掉包检测 + 上下文记录）。
+        （指数退避重试 + 静默掉包检测 + 长文本分割）。
         真实的挂起 / 等待 / 恢复状态转换由 AgentLoop._handle_ask_user 内部处理。
 
         Args:
@@ -489,14 +499,7 @@ class TaskManager:
         full_msg = f"{prefix}{question}"
 
         try:
-            from ..executor.instant import send_final_reply
-
-            await send_final_reply(
-                full_msg, stream_id,
-                self._ctx, self._config, self._prompt_manager,
-                self._prompt_service,
-                max_retries=3,
-            )
+            await self._sender.send_polished(full_msg, stream_id)
             logger.info("已向聊天流 %s 发送 ask_user 提问：%s", stream_id, question[:80])
         except Exception:
             logger.exception("向聊天流 %s 发送 ask_user 提问失败", stream_id)

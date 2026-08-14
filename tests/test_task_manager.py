@@ -23,7 +23,7 @@ from oh_mai_agent.core.usecases.task_control import TaskControl
 from oh_mai_agent.domain.task_record import TaskLevel, TaskRecord, TaskStatus, TriggerType
 from oh_mai_agent.domain.task_store import TaskStore
 from oh_mai_agent.executor.base import ExecutionContext
-from oh_mai_agent.executor.instant import fail_task
+from oh_mai_agent.executor.instant import ReplySender, fail_task
 from oh_mai_agent.permission import PermissionResolver, Role
 from oh_mai_agent.prompt.builders.context_note import ContextNoteBuilder
 from oh_mai_agent.prompt.service import PromptService
@@ -887,7 +887,7 @@ class TestInstantExecution:
         self, mock_ctx: MockCtx, resolver: PermissionResolver, config: MaibotAgentConfig,
          real_store: TaskStore, command_bus: Any,
     ) -> None:
-        """Cross-stream reply (reply_stream_id set) → motivation 传递给 send_final_reply → context.append 被调用（两条：纯文本 + XML 注释）。"""
+        """Cross-stream reply (reply_stream_id set) → 动机 XML 注释写入 reply_target（发送出口本身不写纯文本）。"""
         await real_store.init()
         sched = FakeScheduler()
         reg = ToolRegistry()
@@ -906,9 +906,9 @@ class TestInstantExecution:
         await real_store.save(task)
         await mgr.execute_instant(task)
 
-        assert len(mock_ctx.maisaka.appends) == 2, \
-            f"Expected 2 context.appends (pure text + XML note), got {len(mock_ctx.maisaka.appends)}"
-        entry = mock_ctx.maisaka.appends[1]
+        assert len(mock_ctx.maisaka.appends) == 1, \
+            f"Expected 1 context.append (XML motivation note only), got {len(mock_ctx.maisaka.appends)}"
+        entry = mock_ctx.maisaka.appends[0]
         assert "因小泽委托处理完毕" in entry["visible_text"], \
             f"visible_text should contain intent: {entry['visible_text']}"
         assert entry["stream_id"] == "qq:g:2", \
@@ -920,7 +920,7 @@ class TestInstantExecution:
         self, mock_ctx: MockCtx, resolver: PermissionResolver, config: MaibotAgentConfig,
          real_store: TaskStore, command_bus: Any,
     ) -> None:
-        """Plain instant 任务 (无 reply_stream_id, 无 _is_reply) → motivation=None → 仅有纯文本 context.append。"""
+        """Plain instant 任务 (无 reply_stream_id, 无 _is_reply) → 不写任何上下文（发送出口纯发送）。"""
         await real_store.init()
         sched = FakeScheduler()
         reg = ToolRegistry()
@@ -941,12 +941,8 @@ class TestInstantExecution:
         await mgr.execute_instant(task)
 
         assert mock_ctx._sent_messages, "Plain instant should still send a message"
-        assert len(mock_ctx.maisaka.appends) == 1, \
-            f"Expected 1 context.append (pure text only), got {len(mock_ctx.maisaka.appends)}"
-        entry = mock_ctx.maisaka.appends[0]
-        assert entry["visible_text"] == "该喝水了"
-        assert "message_id" not in entry or entry.get("message_id") == ""
-        assert entry["source_kind"] == "plugin:oh-mai-agent:task-reply"
+        assert mock_ctx.maisaka.appends == [], \
+            f"Expected no context.append (send-only exit), got {len(mock_ctx.maisaka.appends)}"
 
     @pytest.mark.asyncio
     async def test_fail_task_sends_failure_to_reply_stream_id(
@@ -973,6 +969,7 @@ class TestInstantExecution:
         await real_store.save(task)
         exec_ctx = ExecutionContext(
             ctx=mock_ctx, store=real_store, scheduler=sched, config=config,
+            sender=ReplySender(ctx=mock_ctx, config_getter=lambda: config),
         )
         await fail_task(task, real_store, sched, exec_ctx, send_message=True)
 
@@ -1148,6 +1145,7 @@ class TestInstantFailSend:
 
         exec_ctx = ExecutionContext(
             ctx=mock_ctx, store=real_store, scheduler=sched, config=config,
+            sender=ReplySender(ctx=mock_ctx, config_getter=lambda: config),
         )
         await fail_task(task, real_store, sched, exec_ctx, send_message=True)
 
@@ -1296,12 +1294,11 @@ class TestAskCallback:
     async def test_ask_callback_forwards_to_unified_send(
         self, manager: TaskManager, mock_ctx: MockCtx,
     ) -> None:
-        """ask_user 提问经统一发送入口（send_final_reply，默认润色）发送。"""
+        """ask_user 提问经完整发送出口（ReplySender.send_polished，默认润色）发送。"""
         from unittest.mock import patch
 
-        with patch(
-            "oh_mai_agent.executor.instant.send_final_reply",
-            new_callable=AsyncMock,
+        with patch.object(
+            manager._sender, "send_polished", new_callable=AsyncMock,
         ) as send:
             await manager._ask_callback("qq:g:1", "今晚吃什么？")
 
@@ -1309,18 +1306,16 @@ class TestAskCallback:
         args, kwargs = send.call_args.args, send.call_args.kwargs
         assert args[0] == "今晚吃什么？"
         assert args[1] == "qq:g:1"
-        # polish 缺省 True：提问走"更像人"的润色链路
-        assert kwargs.get("polish", True) is True
 
     @pytest.mark.asyncio
     async def test_ask_callback_send_failure_logged_not_raised(
         self, manager: TaskManager, mock_ctx: MockCtx,
     ) -> None:
         """提问发送失败时只记日志，不向上抛（提问不阻塞 Agent 循环）。"""
-        from unittest.mock import patch
+        from unittest.mock import AsyncMock, patch
 
-        async def _boom(*args: Any, **kwargs: Any) -> None:
-            raise RuntimeError("send failed")
-
-        with patch("oh_mai_agent.executor.instant.send_final_reply", _boom):
+        with patch.object(
+            manager._sender, "send_polished",
+            AsyncMock(side_effect=RuntimeError("send failed")),
+        ):
             await manager._ask_callback("qq:g:1", "问题")  # 不应抛异常

@@ -24,8 +24,8 @@ class PolishBuilder(PromptBuilder):
     然后委托 ``self._pm.render("polish", ...)`` 渲染模板；
     ``_pm`` 为 None 时直接抛出 RuntimeError。
 
-    ctx.data 参数：kind 限 reply/relay（缺省 reply，非法值抛 ValueError）；
-    requester 为转达委托人，缺省空串，非空时模板输出委托人提示。
+    ctx.data 参数：requester 为转达委托人，缺省空串，非空（由 send_polished 的
+    ``relay_from`` 传入）时模板输出转达纪律并点名委托人。
     """
 
     @property
@@ -35,12 +35,6 @@ class PolishBuilder(PromptBuilder):
     def build(self, ctx: PromptContext) -> str:
         # 只记录元信息（builder 名 + 上下文键名），不记录提示词内容或参数值
         logger.debug("构建 %s 提示词：上下文键 %s", self.name, sorted(ctx.data))
-        # 先做 kind 校验再做 _pm 检查：即便未注入 pm，非法 kind 也抛 ValueError 而非 RuntimeError
-        kind: str = ctx.data.get("kind", "reply")
-        if kind not in ("reply", "relay"):
-            raise ValueError(
-                f"PolishBuilder: kind must be 'reply' or 'relay', got {kind!r}"
-            )
         # 未注入 PromptManager 时无法渲染模板，直接抛错（由 PromptService 注入）
         if self._pm is None:
             raise RuntimeError("PolishBuilder: PromptManager 未注入")
@@ -63,7 +57,6 @@ class PolishBuilder(PromptBuilder):
             jargon=jargon_text,
             # result 再次归一为空串，避免 None/空值进入模板
             result=result or "",
-            kind=kind,
             requester=requester,
         )
 

@@ -97,7 +97,7 @@ class MaibotAgentPlugin(MaiBotPlugin):
                 self._planner_tool_cache[name] = build_search_users_handler(self.ctx, self.config)
             elif name == "send_message":
                 from .tools.send_message import build_send_message_handler
-                self._planner_tool_cache[name] = build_send_message_handler(self.ctx, self.config, self._pm, self._pm_service)
+                self._planner_tool_cache[name] = build_send_message_handler(self.ctx, self._task_manager.sender)
             elif name == "list_mcp_tools":
                 from .tools.planner.mcp_tools import build_list_mcp_tools_handler
                 self._planner_tool_cache[name] = build_list_mcp_tools_handler(lambda: getattr(self, "_mcp", None))
@@ -350,7 +350,8 @@ class MaibotAgentPlugin(MaiBotPlugin):
         "send_message",
         description=(
             "向好友/群发送消息（自动创建聊天流、默认润色与长文本分割）。"
-            "转达他人之言必须点明委托人。"
+            "转达他人之言必须传 relay_from（委托人姓名/昵称）并点明委托人，"
+            "禁止编造转达内容、禁止冒充本人发言；不传 relay_from 视为本人发言。"
         ),
         visibility="deferred",
         parameters=[
@@ -385,15 +386,9 @@ class MaibotAgentPlugin(MaiBotPlugin):
                 required=False,
             ),
             ToolParameterInfo(
-                name="polish",
-                param_type=ToolParamType.BOOLEAN,
-                description="是否 LLM 润色（可选，默认 true；发代码/命令等不希望改写时设 false）",
-                required=False,
-            ),
-            ToolParameterInfo(
-                name="split",
-                param_type=ToolParamType.BOOLEAN,
-                description="是否分割长文本为多条消息（可选，默认 true；希望整条完整呈现时设 false）",
+                name="relay_from",
+                param_type=ToolParamType.STRING,
+                description="转达委托人姓名/昵称（可选）。转达他人之言时必填，润色会点名委托人；不传视为本人发言",
                 required=False,
             ),
         ],

@@ -140,34 +140,26 @@ class TestPolishBuilder:
         assert "C" in prompt
         assert "R" in prompt
 
-    def test_relay_kind_with_requester(self, pm: PromptManager) -> None:
-        """kind='relay' 且 requester='张三' 时，输出包含转达纪律与委托人提示。"""
+    def test_requester_triggers_relay_block(self, pm: PromptManager) -> None:
+        """requester 非空（relay_from 传入）时，输出包含转达纪律并点名委托人。"""
         builder = PolishBuilder(pm=pm)
         prompt = builder.build(PromptContext(data={
             "jargon": [], "context": "ctx", "result": "r",
-            "kind": "relay", "requester": "张三",
+            "requester": "张三",
         }))
         assert "委托人" in prompt
         assert "张三" in prompt
-        assert "委托转达" in prompt
+        assert "由 张三 委托" in prompt
         assert "我帮你转达" in prompt
 
-    def test_default_kind_reply_omits_relay_block(self, pm: PromptManager) -> None:
-        """缺省 kind（reply）时，输出不含转达纪律块（与既有行为一致）。"""
+    def test_default_requester_empty_omits_relay_block(self, pm: PromptManager) -> None:
+        """requester 缺省（本人发言）时，输出不含转达纪律块。"""
         builder = PolishBuilder(pm=pm)
         prompt = builder.build(PromptContext(data={
             "jargon": [], "context": "ctx", "result": "r",
         }))
         assert "委托人" not in prompt
         assert "转达纪律" not in prompt
-
-    def test_invalid_kind_raises(self, pm: PromptManager) -> None:
-        """kind 为非法值（非 reply/relay）时抛 ValueError。"""
-        builder = PolishBuilder(pm=pm)
-        with pytest.raises(ValueError, match="kind"):
-            builder.build(PromptContext(data={
-                "jargon": [], "context": "ctx", "result": "r", "kind": "bogus",
-            }))
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

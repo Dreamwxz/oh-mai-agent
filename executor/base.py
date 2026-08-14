@@ -77,6 +77,9 @@ class ExecutionContext:
     prompt_service: Any | None = None
     """PromptService —— builder 模式提示词构建。"""
 
+    sender: Any | None = None
+    """ReplySender —— 统一发送出口（send_raw / send_polished / 上下文注释）。"""
+
 
 @dataclass(slots=True)
 class ExecutionResult:

@@ -5,20 +5,18 @@
 上下文记录）。合并后发送逻辑只有一份，两个入口各留一个薄工厂：
 
 - ``build_send_tool``：Agent 循环 Discoverable 工具（TaskManager 注册），
-  润色+发送委托注入的 ``send_polished`` 回调（关注点分离，工具层不依赖
-  ``send_final_reply`` 的参数列表）。
+  润色+发送委托注入的 ``send_polished`` 回调（即 ``ReplySender.send_polished``，
+  关注点分离，工具层不依赖发送器的参数列表）。
 - ``build_send_message_handler``：Planner @Tool handler（plugin.py 懒构建），
-  内部直接绑定 ``send_final_reply``。
+  内部直接绑定 ``ReplySender.send_polished``。
 
 两个入口共享 ``_send_message_core``，行为完全一致（日志、校验、建流、
 返回结构）。目标三选一：``stream_id``（直接发送到指定聊天流，如其他
 用户的流，跳过建流）或 ``group_id`` / ``user_id``（经 open_session 建流）。
-可选参数 ``polish`` / ``split`` 控制发送行为：
 
-- ``polish``（默认 true）：false 时跳过 LLM 润色直发原文，
-  适合发送代码、命令或结构化文本等不希望被改写的内容；
-- ``split``（默认 true）：false 时不分割长文本整条发送，
-  适合希望完整呈现（如代码块）的场景。
+工具固定走完整发送出口（润色 + 分割 + 重试，见 ``ReplySender``），不再暴露
+``polish`` / ``split`` 开关。可选参数 ``relay_from``：转达他人之言时填写
+委托人姓名/昵称（润色点名委托人），不传视为本人发言。
 """
 
 from __future__ import annotations
@@ -34,14 +32,6 @@ from .registry import ToolDefinition
 logger = logging.getLogger(__name__)
 
 
-def _opt_bool(kwargs: dict[str, Any], key: str, default: bool) -> bool:
-    """读取工具调用参数中的布尔值，兼容 LLM 传字符串 "true"/"false"。"""
-    value = kwargs.get(key, default)
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "on"}
-    return bool(value)
-
-
 async def _send_to_stream(
     ctx: object,
     *,
@@ -50,18 +40,17 @@ async def _send_to_stream(
     is_group: bool,
     send_polished: Callable[..., Awaitable[None]],
     prompt_service: Any | None,
-    polish: bool,
-    split: bool,
+    relay_from: str | None = None,
     created: bool = False,
 ) -> dict[str, Any]:
     """向已就绪的聊天流发送：委托润色+发送，随后写上下文记录。"""
-    # ── 委托润色 + 发送（polish/split 可选项透传）──────────────────────
+    # ── 委托润色 + 发送（完整出口：润色 + 分割 + 重试）──────────────────
     try:
         logger.debug(
-            "send_message 委托 send_polished 发送: stream=%s is_group=%s polish=%s split=%s",
-            stream_id, is_group, polish, split,
+            "send_message 委托 send_polished 发送: stream=%s is_group=%s relay_from=%s",
+            stream_id, is_group, relay_from,
         )
-        await send_polished(text, stream_id, is_group, polish=polish, split=split)
+        await send_polished(text, stream_id, relay_from=relay_from)
     except Exception as exc:
         # send_polished 内部重试已耗尽，此处是最终失败
         logger.error("send_message 发送失败（重试已耗尽）: %s", exc, exc_info=True)
@@ -113,8 +102,7 @@ async def _send_message_core(
     platform: str,
     send_polished: Callable[..., Awaitable[None]],
     prompt_service: Any | None,
-    polish: bool = True,
-    split: bool = True,
+    relay_from: str | None = None,
 ) -> dict[str, Any]:
     """send_message 共享核心：参数校验 → 建流/直发 → 润色+发送 → 上下文记录。
 
@@ -128,13 +116,12 @@ async def _send_message_core(
         group_id: 目标群 ID（与 user_id 二选一）。
         user_id: 目标用户 ID（与 group_id 二选一）。
         platform: 平台标识。
-        send_polished: ``async def(text, stream_id, is_group, *, polish, split)``
-            润色 + 发送回调（Agent 版由 TaskManager 注入，Planner 版内部绑定
-            send_final_reply）。
+        send_polished: ``async def(text, stream_id, *, relay_from=None)``
+            完整发送回调（即 ``ReplySender.send_polished``：润色 + 分割 + 重试；
+            Agent 版由 TaskManager 注入，Planner 版内部绑定）。
         prompt_service: PromptService 实例（可选）。提供后 XML 上下文注释
             通过 builder 生成，否则跳过 XML 记录。
-        polish: 是否 LLM 润色（透传给 send_polished）。
-        split: 是否分割长文本（透传给 send_polished）。
+        relay_from: 转达委托人（可选）。非空 = 转达他人之言，润色点名委托人。
 
     Returns:
         ``{"success": bool, ...}`` 结构的结果字典。
@@ -148,10 +135,10 @@ async def _send_message_core(
             logger.warning("send_message 参数校验失败: stream_id 与 group_id/user_id 只能提供其一")
             return {"success": False, "error": "stream_id 与 group_id/user_id 只能提供其一"}
         logger.info(
-            "send_message 入口(直发流): stream_id=%s text=%r polish=%s split=%s",
-            stream_id, text[:80], polish, split,
+            "send_message 入口(直发流): stream_id=%s text=%r relay_from=%s",
+            stream_id, text[:80], relay_from,
         )
-        # 群聊判定沿用 send_final_reply 的推导规则（流 ID 含 ":group:" 视为群聊）
+        # 群聊判定沿用发送器的推导规则（流 ID 含 ":group:" 视为群聊）
         return await _send_to_stream(
             ctx,
             text=text,
@@ -159,8 +146,7 @@ async def _send_message_core(
             is_group=":group:" in stream_id,
             send_polished=send_polished,
             prompt_service=prompt_service,
-            polish=polish,
-            split=split,
+            relay_from=relay_from,
         )
     if not group_id and not user_id:
         logger.warning("send_message 参数校验失败: 未提供 stream_id/group_id/user_id")
@@ -173,8 +159,8 @@ async def _send_message_core(
     is_group = chat_type == "group"
     target_id = group_id or user_id
     logger.info(
-        "send_message 入口: platform=%s group_id=%r user_id=%r text=%r polish=%s split=%s",
-        platform, group_id, user_id, text[:80], polish, split,
+        "send_message 入口: platform=%s group_id=%r user_id=%r text=%r relay_from=%s",
+        platform, group_id, user_id, text[:80], relay_from,
     )
 
     # ── 推导 account_id / scope（从 get_all_streams 匹配真实会话流）─────
@@ -240,8 +226,7 @@ async def _send_message_core(
         is_group=is_group,
         send_polished=send_polished,
         prompt_service=prompt_service,
-        polish=polish,
-        split=split,
+        relay_from=relay_from,
         created=created,
     )
 
@@ -260,8 +245,8 @@ def build_send_tool(
 
     Args:
         ctx: 插件上下文（用于 ctx.chat.open_session）。
-        send_polished: ``async def(text, stream_id, is_group, *, polish, split)``
-            润色 + 发送回调，由上层（TaskManager）注入 send_final_reply。
+        send_polished: ``async def(text, stream_id, *, relay_from=None)``
+            完整发送回调（``ReplySender.send_polished``），由上层（TaskManager）注入。
         min_role: 调用此工具所需的最低角色（默认 USER）。
         prompt_service: PromptService 实例（可选）。提供后，XML 上下文注释
             通过 builder 生成。
@@ -280,18 +265,17 @@ def build_send_tool(
             platform=str(kwargs.get("platform", "qq")).strip(),
             send_polished=send_polished,
             prompt_service=prompt_service,
-            polish=_opt_bool(kwargs, "polish", True),
-            split=_opt_bool(kwargs, "split", True),
+            relay_from=kwargs.get("relay_from") or None,
         )
 
     description = (
         "向好友/群发送消息（自动创建聊天流、默认润色与长文本分割）。"
         "参数: text（消息文本,必填）+ 目标三选一: stream_id（目标聊天流 ID）"
         "或 group_id 或 user_id（不能同时提供多个）"
-        "+ platform（可选,默认 qq）+ polish（可选,默认 true,false 时不润色直发原文）"
-        "+ split（可选,默认 true,false 时不分割长文本整条发送）。"
+        "+ platform（可选,默认 qq）。"
         "若不知道目标的 user_id/group_id，先调用 search_users 按昵称搜索获取。"
-        "转达他人之言必须点明委托人，禁止转述废话。"
+        "转达他人之言必须传 relay_from（委托人姓名/昵称）并点明委托人，禁止编造转达内容、"
+        "禁止冒充本人发言；不传 relay_from 视为本人发言。"
     )
 
     parameters: dict = {
@@ -318,15 +302,9 @@ def build_send_tool(
                 "description": "平台标识（可选，默认 qq）",
                 "default": "qq",
             },
-            "polish": {
-                "type": "boolean",
-                "description": "是否 LLM 润色（可选，默认 true；发代码/命令等不希望改写时设 false）",
-                "default": True,
-            },
-            "split": {
-                "type": "boolean",
-                "description": "是否分割长文本为多条消息（可选，默认 true；希望整条完整呈现时设 false）",
-                "default": True,
+            "relay_from": {
+                "type": "string",
+                "description": "转达委托人姓名/昵称（可选）。转达他人之言时必填，润色会点名委托人；不传视为本人发言",
             },
         },
         "required": ["text"],
@@ -345,32 +323,21 @@ def build_send_tool(
 # ── Planner 版：@Tool handler 工厂 ─────────────────────────────────────────
 
 
-def build_send_message_handler(ctx: Any, config: Any, pm: Any, pm_service: Any) -> Callable[..., Awaitable[dict]]:
+def build_send_message_handler(ctx: Any, sender: Any) -> Callable[..., Awaitable[dict]]:
     """返回 Planner @Tool ``send_message`` 的 handler 逻辑体。
 
     Args:
         ctx: MaiBot PluginContext。
-        config: MaibotAgentConfig。
-        pm: PromptManager（透传给 send_final_reply）。
-        pm_service: PromptService（用于 build context_note）。
+        sender: ``ReplySender`` 实例（绑定 ``send_polished`` 完整发送出口）。
 
     Returns:
         ``async def handler(**kwargs) -> dict``，行为与 Agent 循环版一致。
     """
 
-    from ..executor.instant import send_final_reply
-
     async def _send_polished(
-        text: str, stream_id: str, is_group: bool,
-        *, polish: bool = True, split: bool = True,
+        text: str, stream_id: str, *, relay_from: str | None = None,
     ) -> None:
-        await send_final_reply(
-            text, stream_id,
-            ctx, config, pm,
-            pm_service,
-            max_retries=3, is_group=is_group,
-            polish=polish, split=split,
-        )
+        await sender.send_polished(text, stream_id, relay_from=relay_from)
 
     async def handler(**kwargs: Any) -> dict[str, Any]:
         """Planner 调用：向好友/群发送消息（自动创建流 + 润色 + 重试）。"""
@@ -382,9 +349,8 @@ def build_send_message_handler(ctx: Any, config: Any, pm: Any, pm_service: Any) 
             user_id=str(kwargs.get("user_id", "")).strip(),
             platform=str(kwargs.get("platform", "qq")).strip(),
             send_polished=_send_polished,
-            prompt_service=pm_service,
-            polish=_opt_bool(kwargs, "polish", True),
-            split=_opt_bool(kwargs, "split", True),
+            prompt_service=sender.prompt_service,
+            relay_from=kwargs.get("relay_from") or None,
         )
 
     return handler

@@ -23,8 +23,7 @@ from oh_mai_agent.core.scheduler import TaskScheduler
 from oh_mai_agent.domain.task_record import TaskLevel, TaskRecord, TaskStatus, TriggerType
 from oh_mai_agent.domain.task_store import TaskStore
 from oh_mai_agent.executor.base import ExecutionContext
-from oh_mai_agent.executor import instant as instant_module
-from oh_mai_agent.executor.instant import InstantExecutor
+from oh_mai_agent.executor.instant import InstantExecutor, ReplySender
 from oh_mai_agent.bus.messages import CommandKind, EventKind, TaskCommand, TaskEvent
 
 
@@ -251,12 +250,15 @@ class TestCancel:
         await store.save(task)
         scheduler = TaskScheduler(task_config, store, _noop_executor, command_bus=command_bus)
         scheduler._running.add(task.id)
+        mock_ctx = MockCtx()
+        sender = ReplySender(ctx=mock_ctx, config_getter=lambda: MaibotAgentConfig())
         exec_ctx = ExecutionContext(
-            ctx=MockCtx(), store=store, scheduler=scheduler, config=MaibotAgentConfig(),
+            ctx=mock_ctx, store=store, scheduler=scheduler, config=MaibotAgentConfig(),
+            sender=sender,
         )
 
         with pytest.MonkeyPatch.context() as patch:
-            patch.setattr(instant_module, "send_final_reply", blocked_reply)
+            patch.setattr(sender, "send_polished", blocked_reply)
             execution = asyncio.create_task(InstantExecutor().execute(exec_ctx, task))
             await started.wait()
             assert await scheduler.cancel(task.id) is True

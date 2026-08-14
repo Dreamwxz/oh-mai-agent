@@ -1,12 +1,12 @@
-"""Instant 执行器 —— 润色、分割并发送意图。
+"""Instant 执行器与统一发送出口 —— 润色、分割并发送意图。
 
-从 ``TaskManager.execute_instant`` 迁移而来。Instant 任务是最简单的单步即时动作：
-不需要 LLM 推理、不需要工具调用、不涉及状态机 —— 意图本身就是要发送的消息，
-只需经过 PolishService 润色后按行/句切分（长回复拆成多条，见 ``splitter.py``）
-直发到目标聊天流，任务即算完成。
+``ReplySender`` 提供两条发送出口：
+- ``send_raw``：直发（分割 + 重试），无润色 —— 命令回复、失败通知等确定性文本；
+- ``send_polished``：完整链路（信息获取 → 润色 → 直发）—— 任务回复、提问等；
+以及独立的上下文注释能力（``append_motivation_note``，对用户不可见）。
 
-设计要点：Instant 是两级执行体系（instant / agent）中最轻量的执行器，零等待、零并发控制，
-创建后立刻完成。
+Instant 任务是最简单的单步即时动作：不需要 LLM 推理、不需要工具调用、
+不涉及状态机 —— 意图本身就是要发送的消息，经 ReplySender 发送后任务即完成。
 """
 
 from __future__ import annotations
@@ -15,12 +15,12 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
 from ..config import PolishConfig
 from ..domain.task_record import TaskRecord, TaskStatus, TaskStatusError
-from ..prompt.manager import PromptManager
 from .base import ExecutionContext, ExecutionResult, complete_and_notify
 from .splitter import split_message
 
@@ -93,13 +93,11 @@ class PolishService:
         ctx: Any,
         config: PolishConfig,
         use_jargon: bool = True,
-        prompt_manager: PromptManager | None = None,
         prompt_service: Any | None = None,
     ):
         self.ctx = ctx
         self.config = config
         self.use_jargon = use_jargon
-        self._pm = prompt_manager
         self._prompt_service = prompt_service
 
     # ── 公开接口 ────────────────────────────────────────────────────────────
@@ -110,8 +108,7 @@ class PolishService:
         result: str,
         stream_id: str,
         is_group: bool,
-        kind: str = "reply",
-        requester: str = "",
+        relay_from: str | None = None,
     ) -> str:
         """润色任务结果回复，结合上下文和黑话感知。
 
@@ -126,13 +123,13 @@ class PolishService:
             result: 待润色的原始任务结果文本。
             stream_id: 目标聊天流 ID。
             is_group: 目标流是否为群聊。
-            kind: 润色模式 reply/relay（默认 reply，转发他人之言用 relay）。
-            requester: 转达委托人（仅 relay 模式有意义，缺省空串）。
+            relay_from: 转达委托人（非空 = 转达他人之言，润色点名委托人；
+                        缺省 None = 本人发言）。
 
         Returns:
             润色后的回复文本；失败时返回原始 *result*。
         """
-        logger.debug("开始润色回复：流=%s kind=%s", stream_id, kind)
+        logger.debug("开始润色回复：流=%s relay_from=%s", stream_id, relay_from)
         try:
             context_texts = await self._load_context(stream_id, is_group)
 
@@ -148,8 +145,7 @@ class PolishService:
                 jargon=jargons,
                 context=context_preview,
                 result=result,
-                kind=kind,
-                requester=requester,
+                requester=relay_from or "",
             )
 
             llm_result = await self.ctx.llm.generate(
@@ -307,155 +303,188 @@ class PolishService:
         ]
 
 
-# ── send_final_reply（含指数退避重试） ───────────────────────────────────────
+# ── ReplySender（统一发送出口） ──────────────────────────────────────────────
 
 
-async def send_final_reply(
-    text: str,
-    stream_id: str,
-    ctx: Any,
-    config: Any,
-    prompt_manager: Any | None,
-    prompt_service: Any | None = None,
-    *,
-    max_retries: int = 3,
-    is_group: bool | None = None,
-    motivation: str | None = None,
-    kind: str = "reply",
-    requester: str = "",
-    polish: bool = True,
-    split: bool | None = None,
-) -> None:
-    """润色、分割并发送任务的最终回复到目标聊天流（含指数退避重试）。
+class ReplySender:
+    """统一发送出口：直发 / 完整（润色）两条出口 + 独立的上下文注释能力。
 
-    润色步骤（PolishService）只执行一次，有自身回退逻辑。
-    分割步骤在润色之后进行：长回复经 ``split_message`` 按行/句切成多条，
-    最多 ``config.splitter.max_messages`` 条（``config.splitter.enable=False``
-    时整条发送）。
-    发送步骤（ctx.send.text）逐段进行，每段在失败时指数退避重试：
-      1s → 2s（max_retries 次），任一段全部失败即停止后续分段并抛出最后异常。
-    检测 SDK 静默掉包：ctx.send.text 返回 False/None 视为失败并重试。
-
-    Args:
-        text: 待润色和发送的原始文本。
-        stream_id: 目标聊天流 ID。
-        ctx: MaiBot PluginContext。
-        config: MaibotAgentConfig（含 ``.polish`` 与 ``.splitter`` 子配置）。
-        prompt_manager: Prompt 管理器（可选）。
-        max_retries: ctx.send.text 最大重试次数（默认 3）。
-        is_group: 显式指定是否为群聊；None 时从 stream_id 推导。
-        motivation: 任务动机文本。非空且 prompt_service 可用时，全部分段
-                    发送成功后，将 XML 上下文注释写入目标聊天流
-                    （通过 ctx.maisaka.context.append）。
-        kind: 润色模式 reply/relay，透传给 PolishService.polish（默认 reply）。
-        requester: 转达委托人，透传给 PolishService.polish（缺省空串）。
-        polish: 是否执行 LLM 润色（默认 True）。False 时跳过 PolishService
-                直发原文——发送代码、命令或结构化文本等不希望被改写的内容时使用。
-        split: 是否分割长文本（默认 None）。None 跟随 ``config.splitter.enable``；
-               True/False 强制开启/关闭分割（发送方按场景覆盖全局配置）。
+    设计约定：
+    - **发送出口只对用户可见**（``ctx.send.text``），不做任何 ``context.append``；
+    - 对用户不可见的上下文写入（动机 XML 注释等）是独立能力
+      （``append_motivation_note``），由需要的地方显式调用 —— 这是让
+      MaiBot / Planner 感知插件正在做什么的关键通道；
+    - 基础设施（ctx / config / prompt_service）构造时注入，``config_getter``
+      每次调用读取，配置热更新立即生效。
     """
-    # 润色步骤 — 仅执行一次，PolishService 自身有回退逻辑
-    if polish:
+
+    def __init__(
+        self,
+        *,
+        ctx: Any,
+        config_getter: Callable[[], Any],
+        prompt_service: Any | None = None,
+    ) -> None:
+        """初始化发送器。
+
+        Args:
+            ctx: MaiBot PluginContext（``ctx.send.text`` 发送）。
+            config_getter: ``() -> MaibotAgentConfig``，每次发送时读取（热更新生效）。
+            prompt_service: PromptService（润色 / context_note 构建，可选）。
+        """
+        self._ctx = ctx
+        self._config_getter = config_getter
+        self._prompt_service = prompt_service
+
+    @property
+    def prompt_service(self) -> Any | None:
+        """持有的 PromptService（供工具层构建上下文注释）。"""
+        return self._prompt_service
+
+    # ── 出口1：直发 ─────────────────────────────────────────────────────
+
+    async def send_raw(self, text: str, stream_id: str) -> None:
+        """直发原文：分割（跟随 ``config.splitter``）+ 指数退避重试。
+
+        无润色、无上下文写入 —— 用于命令回复、失败通知等确定性文本，
+        内容不能被 LLM 改写。
+
+        Args:
+            text: 待发送的原始文本。
+            stream_id: 目标聊天流 ID。
+
+        Raises:
+            RuntimeError: 重试耗尽仍发送失败（含 SDK 静默掉包 False/None）。
+        """
+        segments = self._split(text)
+        await self._send_segments(segments, stream_id)
+
+    # ── 出口2：完整链路 ────────────────────────────────────────────────
+
+    async def send_polished(
+        self,
+        text: str,
+        stream_id: str,
+        *,
+        relay_from: str | None = None,
+    ) -> None:
+        """获取信息（上下文/黑话）→ 润色 → 直发（分割 + 重试）。
+
+        润色失败时降级为原文发送（PolishService 内部回退），不阻塞发送。
+        ``relay_from`` 非空 = 转达他人之言（润色点名委托人），缺省 = 本人发言。
+
+        Args:
+            text: 待润色并发送的原始文本。
+            stream_id: 目标聊天流 ID。
+            relay_from: 转达委托人姓名/昵称（可选）。
+        """
+        config = self._config_getter()
         svc = PolishService(
-            ctx=ctx,
+            ctx=self._ctx,
             config=config.polish,
-            prompt_manager=prompt_manager,
-            prompt_service=prompt_service,
+            prompt_service=self._prompt_service,
         )
         polished = await svc.polish(
             result=text,
             stream_id=stream_id,
-            is_group=is_group if is_group is not None else (":group:" in stream_id),
-            kind=kind,
-            requester=requester,
+            is_group=":group:" in stream_id,
+            relay_from=relay_from,
         )
-    else:
-        polished = text
+        await self.send_raw(polished, stream_id)
 
-    # 分割步骤 — 长回复按行/句切分（复刻 MaiBot response_splitter 思路）
-    splitter = getattr(config, "splitter", None)
-    use_split = split if split is not None else (splitter is not None and splitter.enable)
-    if use_split:
-        segments = split_message(
-            polished,
-            max_length=splitter.max_length,
-            max_messages=splitter.max_messages,
-        ) or [polished]
-    else:
-        segments = [polished]
-    if len(segments) > 1:
-        logger.debug(
-            "回复文本分割为 %d 段（共 %d 字符），流=%s",
-            len(segments), len(polished), stream_id,
-        )
+    # ── 独立能力：上下文注释（对用户不可见） ─────────────────────────────
 
-    # 发送步骤 — 逐段指数退避重试，任一段耗尽重试即停止后续分段
-    last_exc: Exception | None = None
-    for segment in segments:
-        for attempt in range(max_retries):
-            try:
-                logger.debug(
-                    "发送回复第 %d/%d 次尝试：流=%s（本次退避间隔 %ds）",
-                    attempt + 1, max_retries, stream_id, 2 ** attempt,
-                )
-                result = await ctx.send.text(segment, stream_id)
-                if result in (False, None):
-                    raise RuntimeError("send.text returned False/None")
-                break
-            except Exception as exc:
-                last_exc = exc
-                if attempt < max_retries - 1:
-                    backoff = 2 ** attempt
-                    logger.warning(
-                        "发送回复第 %d/%d 次尝试失败（流=%s），%ds 后重试：%s",
-                        attempt + 1, max_retries, stream_id, backoff, exc,
-                    )
-                    await asyncio.sleep(backoff)
-                else:
-                    logger.error(
-                        "发送回复第 %d/%d 次尝试失败（流=%s），重试 %d 次全部失败，放弃发送",
-                        attempt + 1, max_retries, stream_id, max_retries,
-                        exc_info=True,
-                    )
-        else:
-            # 本段重试耗尽 —— 停止发送后续分段
-            break
-        # 成功发送后，向上下文注入记录（每段一条纯文本记录，无 XML）
+    async def append_motivation_note(self, stream_id: str, content: str) -> None:
+        """向目标聊天流写入动机 XML 上下文注释（``context_note`` 模板）。
+
+        对用户不可见，写给 MaiBot / Planner 的上下文 —— 让其了解
+        "这条消息是某个任务的结果、任务意图是什么"。任何失败仅告警。
+
+        Args:
+            stream_id: 目标聊天流 ID。
+            content: 动机内容（如任务意图文本）。
+        """
+        if not content or self._prompt_service is None:
+            return
         try:
-            await ctx.maisaka.context.append(
+            note_id = f"oh-mai-agent:task-note:{int(time.time() * 1000)}"
+            note_text = self._prompt_service.build(
+                "context_note",
+                kind="task-reply",
+                content=content,
+                id=note_id,
+            )
+            await self._ctx.maisaka.context.append(
                 stream_id=stream_id,
-                segments=[{"type": "text", "content": segment}],
-                visible_text=segment,
+                segments=[{"type": "text", "content": note_text}],
+                visible_text=note_text,
+                message_id=note_id,
                 source_kind="plugin:oh-mai-agent:task-reply",
             )
         except Exception:
-            logger.warning("纯文本上下文记录写入失败，流=%s", stream_id, exc_info=True)
-    else:
-        # 全部分段发送成功
-        # XML 动机注释（仅当 motivation 非空且 prompt_service 可用）
-        if motivation and prompt_service is not None:
-            try:
-                note_id = f"oh-mai-agent:task-note:{int(time.time() * 1000)}"
-                note_text = prompt_service.build(
-                    "context_note",
-                    kind="task-reply",
-                    content=motivation,
-                    id=note_id,
-                )
-                await ctx.maisaka.context.append(
-                    stream_id=stream_id,
-                    segments=[{"type": "text", "content": note_text}],
-                    visible_text=note_text,
-                    message_id=note_id,
-                    source_kind="plugin:oh-mai-agent:task-reply",
-                )
-            except Exception:
-                logger.warning("XML 动机注释写入失败，流=%s", stream_id, exc_info=True)
-        return
+            logger.warning("XML 动机注释写入失败，流=%s", stream_id, exc_info=True)
 
-    # 某段重试耗尽 —— 抛出最后异常交由上层标记 FAILED
-    if last_exc is not None:
-        raise last_exc
+    # ── 内部 ───────────────────────────────────────────────────────────
+
+    def _split(self, text: str) -> list[str]:
+        """按 ``config.splitter`` 配置分割长文本；未启用或短文本原样返回。"""
+        config = self._config_getter()
+        splitter = getattr(config, "splitter", None)
+        if splitter is not None and splitter.enable:
+            segments = split_message(
+                text,
+                max_length=splitter.max_length,
+                max_messages=splitter.max_messages,
+            ) or [text]
+        else:
+            segments = [text]
+        if len(segments) > 1:
+            logger.debug(
+                "回复文本分割为 %d 段（共 %d 字符）", len(segments), len(text),
+            )
+        return segments
+
+    async def _send_segments(self, segments: list[str], stream_id: str) -> None:
+        """逐段发送，指数退避重试（``config.send.max_retries``），静默掉包检测。
+
+        任一段重试耗尽即停止后续分段并抛出最后异常（交由上层标记 FAILED）。
+        """
+        config = self._config_getter()
+        send_cfg = getattr(config, "send", None)
+        max_retries = send_cfg.max_retries if send_cfg is not None else 3
+
+        last_exc: Exception | None = None
+        for segment in segments:
+            for attempt in range(max_retries):
+                try:
+                    logger.debug(
+                        "发送回复第 %d/%d 次尝试：流=%s（本次退避间隔 %ds）",
+                        attempt + 1, max_retries, stream_id, 2 ** attempt,
+                    )
+                    result = await self._ctx.send.text(segment, stream_id)
+                    if result in (False, None):
+                        raise RuntimeError("send.text returned False/None")
+                    break
+                except Exception as exc:
+                    last_exc = exc
+                    if attempt < max_retries - 1:
+                        backoff = 2 ** attempt
+                        logger.warning(
+                            "发送回复第 %d/%d 次尝试失败（流=%s），%ds 后重试：%s",
+                            attempt + 1, max_retries, stream_id, backoff, exc,
+                        )
+                        await asyncio.sleep(backoff)
+                    else:
+                        logger.error(
+                            "发送回复第 %d/%d 次尝试失败（流=%s），重试 %d 次全部失败，放弃发送",
+                            attempt + 1, max_retries, stream_id, max_retries,
+                            exc_info=True,
+                        )
+            else:
+                # 本段重试耗尽 —— 停止发送后续分段
+                break
+        if last_exc is not None:
+            raise last_exc
 
 
 # ── fail_task ────────────────────────────────────────────────────────────────
@@ -471,14 +500,14 @@ async def fail_task(
 ) -> None:
     """标记任务为 FAILED，持久化，通知调度器。
 
-    当 *send_message* 为 True 时，在状态变更前先向目标聊天流发送润色后的失败消息。
-    消息发送使用 ``send_final_reply``（含指数退避重试），发送失败不影响任务状态更新。
+    当 *send_message* 为 True 时，在状态变更前先向目标聊天流直发失败消息
+    （经 ``ReplySender.send_raw``，确定性错误文本不润色），发送失败不影响任务状态更新。
 
     Args:
         task: 待标记为失败的任务。
         store: TaskStore 持久化。
         scheduler: TaskScheduler 通知。
-        exec_ctx: 执行上下文（含 ctx、config、prompt_manager）。
+        exec_ctx: 执行上下文（含 sender / ctx / config）。
         send_message: 是否先发送失败消息再变更状态。
     """
     if task.is_terminal():
@@ -493,16 +522,15 @@ async def fail_task(
     if send_message:
         error_reason = task.error() or "任务执行失败"
         fail_text = f"任务执行失败: {error_reason}"
-        try:
-            await send_final_reply(
-                fail_text, task.reply_target, exec_ctx.ctx, exec_ctx.config,
-                exec_ctx.prompt_manager,
-                exec_ctx.prompt_service,
-            )
-        except Exception:
-            logger.warning(
-                "失败消息发送失败，任务 %s 仍将继续标记为 FAILED", task.id, exc_info=True,
-            )
+        sender = getattr(exec_ctx, "sender", None)
+        if sender is not None:
+            try:
+                # 失败通知走直发出口：确定性错误文本不应被润色改写
+                await sender.send_raw(fail_text, task.reply_target)
+            except Exception:
+                logger.warning(
+                    "失败消息发送失败，任务 %s 仍将继续标记为 FAILED", task.id, exc_info=True,
+                )
 
     try:
         task.transition(TaskStatus.FAILED)
@@ -522,26 +550,19 @@ class InstantExecutor:
     """执行 Instant 任务：在当前进程中润色并发送。
 
     Instant 任务为简单的单步即时动作 —— 意图即消息，无 LLM 推理和工具调用。
-    执行经 ``send_final_reply`` 完成，随后持久化完成状态并通知调度器。
+    执行经 ``ReplySender.send_polished`` 完成，随后持久化完成状态并通知调度器。
     """
 
     async def execute(self, exec_ctx: ExecutionContext, task: TaskRecord) -> ExecutionResult:
         """润色并发送任务意图，然后完成或失败任务。"""
         try:
-            requester = await self._resolve_requester(exec_ctx.ctx, task)
-            await send_final_reply(
-                task.intent,
-                task.reply_target,
-                exec_ctx.ctx,
-                exec_ctx.config,
-                exec_ctx.prompt_manager,
-                exec_ctx.prompt_service,
-                max_retries=3,
-                kind="reply",
-                requester=requester,
-            )
+            sender = exec_ctx.sender
+            if sender is None:
+                raise RuntimeError("ExecutionContext 缺少 sender（ReplySender）")
+            await sender.send_polished(task.intent, task.reply_target)
             if task.reply_stream_id is not None or task.is_reply_task():
-                await self._append_motivation_note(exec_ctx, task)
+                # 跨流回复：动机 XML 注释（对用户不可见，写入 MaiBot 上下文）
+                await sender.append_motivation_note(task.reply_target, task.intent)
             fresh_task = await exec_ctx.store.get(task.id)
             if fresh_task is None or not fresh_task.is_terminal():
                 await complete_and_notify(task, exec_ctx.store, exec_ctx.scheduler)
@@ -565,63 +586,3 @@ class InstantExecutor:
                 send_message=True,
             )
             return ExecutionResult(status="FAILED", message=str(exc), error=str(exc))
-
-    # ── 内部：requester 解析 / 动机注释 ──────────────────────────────────
-
-    async def _resolve_requester(self, ctx: Any, task: TaskRecord) -> str:
-        """从 ``task.owner`` 解析转达委托人展示名。
-
-        经 ``ctx.chat.get_all_streams`` 匹配 user_id 后取
-        ``user_nickname`` / ``user_cardname``；任何失败回退空串。
-        """
-        try:
-            owner = task.owner or ""
-            if not owner or ":" not in owner:
-                return ""
-            user_id = owner.split(":", 1)[1]
-            streams = await ctx.chat.get_all_streams(task.platform or "qq")
-            for stream in streams:
-                if stream.get("user_id") == user_id:
-                    return (
-                        stream.get("user_nickname")
-                        or stream.get("user_cardname")
-                        or ""
-                    )
-        except Exception:
-            logger.warning(
-                "解析转达委托人失败（回退空串）：task=%s", task.id, exc_info=True,
-            )
-        return ""
-
-    async def _append_motivation_note(self, exec_ctx: ExecutionContext, task: TaskRecord) -> None:
-        """跨流回复的动机 XML 上下文注释（父进程侧补齐）。
-
-         ``send_final_reply`` 不携带 motivation（发送侧只读），
-         跨流回复（``reply_stream_id`` 或 ``_is_reply``）
-        的动机注释由父进程在 completed 事件后直接写入——与迁移前
-        ``send_final_reply`` 的 motivation 分支语义一致（同模板、同记录）。
-        """
-        if task.reply_stream_id is None and not task.is_reply_task():
-            return
-        prompt_service = exec_ctx.prompt_service
-        if prompt_service is None:
-            return
-        try:
-            note_id = f"oh-mai-agent:task-note:{int(time.time() * 1000)}"
-            note_text = prompt_service.build(
-                "context_note",
-                kind="task-reply",
-                content=task.intent,
-                id=note_id,
-            )
-            await exec_ctx.ctx.maisaka.context.append(
-                stream_id=task.reply_target,
-                segments=[{"type": "text", "content": note_text}],
-                visible_text=note_text,
-                message_id=note_id,
-                source_kind="plugin:oh-mai-agent:task-reply",
-            )
-        except Exception:
-            logger.warning(
-                "XML 动机注释写入失败，流=%s", task.reply_target, exc_info=True,
-            )
