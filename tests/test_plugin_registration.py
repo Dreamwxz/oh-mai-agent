@@ -2,8 +2,8 @@
 
 覆盖 todo-2（C1+C2 注册层）的验收标准：
 - Command 集合恰为 7 个 maitask_* 名，无旧 task_* Command 名；
-- Tool 集合含 9 个名（含 task_status，不含 task_query）；
-- 4 个 Tool metadata visibility=="visible"，5 个 == "deferred"；
+- Tool 集合含 11 个名（含 task_status，不含 task_query）；
+- 4 个 Tool metadata visibility=="visible"，7 个 == "deferred"；
 - Tool 与 Command 不存在同名冲突。
 """
 
@@ -33,6 +33,8 @@ EXPECTED_TOOLS = {
     "task_schedule",
     "search_users",
     "send_message",
+    "list_mcp_tools",
+    "call_mcp_tool",
 }
 
 VISIBLE_TOOLS = {"task_create", "task_list", "task_status", "task_delete"}
@@ -51,8 +53,8 @@ def test_command_set_is_exactly_seven_maitask_names() -> None:
     assert commands == EXPECTED_COMMANDS
 
 
-def test_tool_set_has_nine_names_including_task_status() -> None:
-    """Tool 集合含 9 个名（含 task_status，不含 task_query）。"""
+def test_tool_set_has_eleven_names_including_task_status() -> None:
+    """Tool 集合含 11 个名（含 task_status，不含 task_query）。"""
     components = _collect()
     tools = {c["name"] for c in components if c["type"] == "TOOL"}
     assert tools == EXPECTED_TOOLS
@@ -68,16 +70,16 @@ def test_no_legacy_command_names() -> None:
 
 
 def test_visibility_metadata_split() -> None:
-    """4 个 Tool visibility==visible, 5 个 == deferred。"""
+    """4 个 Tool visibility==visible, 7 个 == deferred。"""
     components = _collect()
     tools = [c for c in components if c["type"] == "TOOL"]
     visible = {c["name"] for c in tools if c["metadata"].get("visibility") == "visible"}
     deferred = {c["name"] for c in tools if c["metadata"].get("visibility") == "deferred"}
-    assert len(tools) == 9
+    assert len(tools) == 11
     assert visible == VISIBLE_TOOLS
     assert deferred == EXPECTED_TOOLS - VISIBLE_TOOLS
     assert len(visible) == 4
-    assert len(deferred) == 5
+    assert len(deferred) == 7
 
 
 def test_no_name_collision_between_tool_and_command() -> None:

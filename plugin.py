@@ -120,13 +120,19 @@ class MaibotAgentPlugin(MaiBotPlugin):
             elif name == "send_message":
                 from .tools.send_message import build_send_message_handler
                 self._planner_tool_cache[name] = build_send_message_handler(self.ctx, self.config, self._pm, self._pm_service)
+            elif name == "list_mcp_tools":
+                from .tools.planner.mcp_tools import build_list_mcp_tools_handler
+                self._planner_tool_cache[name] = build_list_mcp_tools_handler(lambda: getattr(self, "_mcp", None))
+            elif name == "call_mcp_tool":
+                from .tools.planner.mcp_tools import build_call_mcp_tool_handler
+                self._planner_tool_cache[name] = build_call_mcp_tool_handler(lambda: getattr(self, "_mcp", None))
             else:
                 from .tools.planner.task_tools import build_task_tools
                 self._planner_tool_cache[name] = build_task_tools(self._task_manager)[name]
         return self._planner_tool_cache[name]
 
     # ═══════════════════════════════════════════════════════════════════════
-    # @Tool：暴露给主 Planner 的安全子集（9 个工具）
+    # @Tool：暴露给主 Planner 的安全子集（11 个工具）
     # ═══════════════════════════════════════════════════════════════════════
 
     @Tool(
@@ -416,6 +422,42 @@ class MaibotAgentPlugin(MaiBotPlugin):
     )
     async def _tool_send_message(self, **kwargs: Any) -> dict[str, Any]:
         return await self._get_planner_tool("send_message")(**kwargs)
+
+    @Tool(
+        "list_mcp_tools",
+        description="列出所有已连接的 MCP 服务器及其可用工具。调用 call_mcp_tool 前先用此工具了解有哪些工具可用。",
+        visibility="deferred",
+    )
+    async def _tool_list_mcp_tools(self, **kwargs: Any) -> dict[str, Any]:
+        return await self._get_planner_tool("list_mcp_tools")(**kwargs)
+
+    @Tool(
+        "call_mcp_tool",
+        description="调用 MCP 服务器的工具。先用 list_mcp_tools 查看可用的服务器和工具列表。arguments 是 JSON 字符串或对象，参数结构由具体工具决定。",
+        visibility="deferred",
+        parameters=[
+            ToolParameterInfo(
+                name="server",
+                param_type=ToolParamType.STRING,
+                description="MCP 服务器名称",
+                required=True,
+            ),
+            ToolParameterInfo(
+                name="tool",
+                param_type=ToolParamType.STRING,
+                description="工具名称",
+                required=True,
+            ),
+            ToolParameterInfo(
+                name="arguments",
+                param_type=ToolParamType.STRING,
+                description='工具参数的 JSON 字符串（如 {"url": "https://..."}），不传则使用空参数',
+                required=False,
+            ),
+        ],
+    )
+    async def _tool_call_mcp_tool(self, **kwargs: Any) -> dict[str, Any]:
+        return await self._get_planner_tool("call_mcp_tool")(**kwargs)
 
     # ═══════════════════════════════════════════════════════════════════════
     # @Command：/maitask 命令组 — 薄壳委托 commands.py

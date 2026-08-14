@@ -1,7 +1,7 @@
 """Planner tool 元数据测试：description、enum_values、stream_id 透传。
 
 覆盖 todo-3（C3+C4 planner 侧）的验收标准：
-- 9 个 @Tool 的 description 非空且含定位句；
+- 11 个 @Tool 的 description 非空且含定位句；
 - task_create / task_schedule 的 description 含对方工具名（互为区分）；
 - task_status 与 task_history 的 description 互相区分；
 - task_list 的 status 参数 enum_values 为 8 个 TaskStatus 值；
@@ -34,11 +34,12 @@ EXPECTED_TOOL_NAMES = {
     "task_create", "task_list", "task_status", "task_modify",
     "task_delete", "task_history", "task_schedule",
     "search_users", "send_message",
+    "list_mcp_tools", "call_mcp_tool",
 }
 
 
 def test_all_tool_descriptions_non_empty() -> None:
-    """9 个 @Tool 全部有非空 description。"""
+    """11 个 @Tool 全部有非空 description。"""
     components = _collect()
     tools = {c["name"]: c["metadata"]["description"] for c in components if c["type"] == "TOOL"}
     for name in EXPECTED_TOOL_NAMES:
