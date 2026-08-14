@@ -27,12 +27,14 @@ from .presets import resolve_effective_servers
 logger = logging.getLogger(__name__)
 
 #: MCPManager.start 的整体启动超时上限（秒）。硬编码常量，不暴露到配置：
-#: 任何环境都不应因某个 MCP 服务器无响应而拖垮插件加载（supervisor 就绪窗口）。
-_STARTUP_TIMEOUT_S: float = 15.0
+#: 任何环境都不应因某个 MCP 服务器无响应而拖垮插件加载（supervisor 就绪窗口
+#: 为 30s，整体上限须低于该窗口并留余量）。
+_STARTUP_TIMEOUT_S: float = 25.0
 
 #: 单个 MCP 服务器的启动预算（秒）：connect + initialize + list_tools 受其约束，
-#: 坏服务器只浪费此预算而非整个整体启动上限。硬编码常量，不暴露到配置。
-_PER_SERVER_STARTUP_TIMEOUT_S: float = 5.0
+#: 坏服务器只浪费此预算而非整个整体启动上限。远程 HTTP 服务器（如 exa）在
+#: 网络波动时 tools/list 响应可能达数秒，预算不宜过紧。硬编码常量，不暴露到配置。
+_PER_SERVER_STARTUP_TIMEOUT_S: float = 15.0
 
 
 def _stdio_module_available(server_cfg: MCPServerConfig) -> bool:

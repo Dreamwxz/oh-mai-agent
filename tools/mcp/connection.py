@@ -597,9 +597,10 @@ class MCPConnection:
             raise RuntimeError("MCP connection not established")
 
         body = json.dumps(payload).encode("utf-8")
-        # LSP 风格帧：Content-Length 头 + 空行 + JSON 体
-        frame = b"Content-Length: %d\r\n\r\n%s" % (len(body), body)
-        proc.stdin.write(frame)
+        # MCP Python SDK <2.0 的 stdio 服务器默认 newline-delimited JSON 帧
+        # （每行一条 JSON-RPC 消息）；Content-Length 帧是 SDK 2.0 起的格式，
+        # 当前宿主环境 mcp 1.x 只认 newline 帧（已由 manifest 依赖声明 pin 住）。
+        proc.stdin.write(body + b"\n")
         try:
             await asyncio.wait_for(proc.stdin.drain(), timeout=self._timeout)
         except (BrokenPipeError, ConnectionResetError):
@@ -613,7 +614,9 @@ class MCPConnection:
     async def _read_stdio_response(self) -> dict:
         """从 stdio 进程的 stdout 读取单条 JSON-RPC 消息。
 
-        解析 LSP 风格的 ``Content-Length: N\r\n\r\n{json}`` 帧格式。
+        兼容两种帧格式：
+            - ``Content-Length: N\r\n\r\n{json}``（MCP Python SDK 2.0+）
+            - newline-delimited JSON，每行一条（MCP Python SDK <2.0）
         跳过中间的无关消息（如未帧化的 stdout 噪音或通知响应），
         直到找到包含 ``id`` 字段的消息为止。
         """
@@ -624,27 +627,43 @@ class MCPConnection:
         # 可能需要跳过服务器发出的通知响应（无 `id` 字段）。
         # 持续读取直到收到包含 `id` 的消息。
         while True:
-            # 逐行读取头部直到遇到空行
-            content_length = 0
-            while True:
-                line = await asyncio.wait_for(proc.stdout.readline(), timeout=self._timeout)
-                if not line:
-                    raise RuntimeError("MCP server process stdout closed unexpectedly")
-                stripped = line.rstrip(b"\r\n")
-                if not stripped:
-                    break  # 空行 = 头部结束
-                if stripped.lower().startswith(b"content-length:"):
-                    content_length = _parse_content_length_header(stripped)
+            # 第一行决定帧格式：Content-Length 头 → 帧解析；否则按 newline JSON 行处理
+            line = await asyncio.wait_for(proc.stdout.readline(), timeout=self._timeout)
+            if not line:
+                raise RuntimeError("MCP server process stdout closed unexpectedly")
+            stripped = line.rstrip(b"\r\n")
 
-            if content_length <= 0:
-                logger.warning(
-                    "MCP 服务器 '%s'：响应缺少 Content-Length 头，跳过该消息",
-                    self._config.name,
+            if stripped.lower().startswith(b"content-length:"):
+                content_length = _parse_content_length_header(stripped)
+                # 继续读头部其余行直到空行
+                while True:
+                    hline = await asyncio.wait_for(proc.stdout.readline(), timeout=self._timeout)
+                    if not hline:
+                        raise RuntimeError("MCP server process stdout closed unexpectedly")
+                    if not hline.rstrip(b"\r\n"):
+                        break  # 空行 = 头部结束
+                if content_length <= 0:
+                    logger.warning(
+                        "MCP 服务器 '%s'：响应缺少 Content-Length 头，跳过该消息",
+                        self._config.name,
+                    )
+                    continue
+                body_bytes = await asyncio.wait_for(
+                    proc.stdout.readexactly(content_length), timeout=self._timeout
                 )
-                continue
-
-            body_bytes = await asyncio.wait_for(proc.stdout.readexactly(content_length), timeout=self._timeout)
-            msg = json.loads(body_bytes.decode("utf-8"))
+                msg = json.loads(body_bytes.decode("utf-8"))
+            else:
+                if not stripped:
+                    continue  # 空行噪音
+                try:
+                    msg = json.loads(stripped.decode("utf-8"))
+                except json.JSONDecodeError:
+                    logger.warning(
+                        "MCP 服务器 '%s'：忽略无法解析的 stdout 行：%s",
+                        self._config.name,
+                        stripped[:120].decode("utf-8", errors="replace"),
+                    )
+                    continue
 
             # 如果消息没有 "id" 字段，则为通知（或针对我们发出的通知的响应）；
             # 跳过并继续读取下一条。

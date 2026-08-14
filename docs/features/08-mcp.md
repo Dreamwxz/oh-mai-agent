@@ -150,3 +150,14 @@ exa 启用且用户列表无同名或同 URL 条目时加入，fetch 启用且�
   保证精确）。
 - **预设可被同名条目覆盖**：用户 `servers` 列表中与预设同名（`exa` / `fetch`）的条目会替代
   预设连接，需注意配置一致性。
+- **stdio 帧格式曾与 MCP Python SDK <2.0 不匹配（已修复）**：插件自研 stdio 客户端曾按
+  LSP 风格 `Content-Length` 帧收发，而 MCP Python SDK 1.x 的 stdio 服务器默认
+  newline-delimited JSON（每行一条 JSON-RPC 消息），双方无法完成 initialize 握手，
+  内置 fetch 预设因此每次启动超时（5s）被跳过。现已修复：发送侧改用 newline 帧
+  （`MCPConnection._send_raw`），读取侧兼容两种格式
+  （`MCPConnection._read_stdio_response`）。`_manifest.json` 的 `dependencies` 显式声明
+  `mcp>=1.1.3,<2.0.0` 固定宿主兼容区间（MaiBot 本体对 `mcp` 无版本约束，此声明不冲突、
+  不阻止加载），防止宿主环境将 `mcp` 升级到 2.x。**MaiBot 本体 MCP 模块
+  （`src.mcp_module`，官方 SDK 客户端）自始不受此问题影响，工作正常**。残余限制：
+  发送侧固定 newline 帧，若宿主环境切换到 mcp SDK 2.0（Content-Length 帧服务器），
+  发送侧需同步适配。
