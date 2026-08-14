@@ -10,6 +10,7 @@ TaskRecord 是一个 dataclass，将所有任务字段收纳在单个 JSON 可�
 from __future__ import annotations
 
 import logging
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -545,3 +546,42 @@ class TaskRecord:
         record._warn_metadata_types()
 
         return record
+
+
+def new_task_record(
+    *,
+    title: str,
+    intent: str,
+    level: TaskLevel,
+    owner: str,
+    stream_id: str,
+    platform: str,
+    priority: int = 0,
+    trigger: TriggerType = TriggerType.NOW,
+    delay_seconds: int | None = None,
+    cron_expr: str | None = None,
+    reply_stream_id: str | None = None,
+) -> TaskRecord:
+    """构造新任务记录（PENDING + NOW 触发 + 新 uuid），供各创建路径复用。
+
+    各创建入口（``TaskCrud.create_task``、回复任务分发等）经此构造器统一
+    字段默认值，避免多处手工拼装导致新增字段时遗漏。
+    """
+    return TaskRecord(
+        id=str(uuid.uuid4()),
+        title=title,
+        intent=intent,
+        level=level,
+        owner=owner,
+        stream_id=stream_id,
+        platform=platform,
+        status=TaskStatus.PENDING,
+        trigger_type=trigger,
+        delay_seconds=delay_seconds,
+        cron_expr=cron_expr,
+        scheduled_at=None,
+        priority=priority,
+        reply_stream_id=reply_stream_id,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )

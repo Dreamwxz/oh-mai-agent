@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import logging
-import uuid
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 
 from ...config import MaibotAgentConfig
 from ...domain.status_formatter import StatusFormatter
-from ...domain.task_record import TaskLevel, TaskRecord, TaskStatus, TriggerType
+from ...domain.task_record import (
+    TaskLevel,
+    TaskRecord,
+    TaskStatus,
+    TriggerType,
+    new_task_record,
+)
 from ...domain.task_store import TaskStore
 from ...permission import PermissionResolver, Role
 from ..scheduler import TaskScheduler
@@ -79,13 +84,12 @@ class TaskCrud:
             title = intent[:40]
         title = title.strip()[:80]
 
-        task = TaskRecord(
-            id=str(uuid.uuid4()), title=title, intent=intent, level=level,
+        task = new_task_record(
+            title=title, intent=intent, level=level,
             owner=owner, stream_id=stream_id, platform=platform,
-            status=TaskStatus.PENDING, trigger_type=trigger,
+            trigger=trigger,
             delay_seconds=delay_seconds, cron_expr=cron_expr,
-            scheduled_at=None, priority=priority, reply_stream_id=reply_stream_id,
-            created_at=datetime.now(), updated_at=datetime.now(),
+            priority=priority, reply_stream_id=reply_stream_id,
         )
         # 持久化创建者角色：执行期角色解析（make_role_provider）在 owner 为
         # 会话 UUID 等无法映射平台/用户形态时无法还原创建者权限（会回落 guest，

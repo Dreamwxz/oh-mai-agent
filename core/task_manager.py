@@ -16,7 +16,7 @@ from typing import Any
 from ..executor.context import current_task, make_role_provider
 from ..executor.instant import ReplySender
 from ..config import MaibotAgentConfig
-from ..executor import ExecutionContext, ExecutorFactory
+from ..executor import ExecutionContext, ExecutorFactory, make_exec_ctx
 from ..domain.status_formatter import StatusFormatter
 from ..permission import PermissionResolver, Role
 from ..prompt.manager import PromptManager
@@ -152,7 +152,7 @@ class TaskManager:
 
     def _make_exec_ctx(self) -> ExecutionContext:
         """用当前 TaskManager 状态构造 ExecutionContext。"""
-        return ExecutionContext(
+        return make_exec_ctx(
             ctx=self._ctx,
             store=self._store,
             scheduler=self._scheduler,

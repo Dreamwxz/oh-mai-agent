@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 import logging
-import uuid
-from datetime import datetime
 from typing import Any
 
 from ...bus import CommandKind, TaskCommand
 from ...config import MaibotAgentConfig
-from ...domain.task_record import TaskLevel, TaskRecord, TaskStatus, TriggerType
+from ...domain.task_record import TaskLevel, TaskRecord, TaskStatus, new_task_record
 from ...domain.task_store import TaskStore
-from ...executor import ExecutionContext, ExecutorFactory
+from ...executor import ExecutionContext, ExecutorFactory, make_exec_ctx
 from ...prompt.manager import PromptManager
 from ..scheduler import TaskScheduler
 
@@ -50,19 +48,14 @@ class TaskControl:
 
     async def _dispatch_reply_instant(self, task: TaskRecord, text: str) -> None:
         """Persist and enqueue a reply as an instant task."""
-        reply_task = TaskRecord(
-            id=str(uuid.uuid4()),
+        reply_task = new_task_record(
             title=f"Reply: {task.title[:60]}",
             intent=text,
             level=TaskLevel.INSTANT,
             owner=task.owner,
             stream_id=task.reply_target,
             platform=task.platform,
-            status=TaskStatus.PENDING,
-            trigger_type=TriggerType.NOW,
             priority=task.priority,
-            created_at=datetime.now(),
-            updated_at=datetime.now(),
         )
         reply_task.mark_as_reply()
         await self._store.save(reply_task)
@@ -75,7 +68,7 @@ class TaskControl:
 
     async def execute_instant(self, task: TaskRecord) -> None:
         """Execute an instant task through the executor factory."""
-        exec_ctx = ExecutionContext(
+        exec_ctx = make_exec_ctx(
             ctx=self._ctx,
             store=self._store,
             scheduler=self._scheduler,

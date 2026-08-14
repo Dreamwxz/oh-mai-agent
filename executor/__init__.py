@@ -5,7 +5,7 @@
 不依赖插件实例，所有外部依赖通过 ExecutionContext 注入。
 """
 
-from .base import ExecutionContext, ExecutionResult, TaskExecutor
+from .base import ExecutionContext, ExecutionResult, TaskExecutor, make_exec_ctx
 from .factory import ExecutorFactory
 from .instant import InstantExecutor
 from .agent import AgentExecutor
@@ -17,4 +17,5 @@ __all__ = [
     "InstantExecutor",
     "AgentExecutor",
     "TaskExecutor",
+    "make_exec_ctx",
 ]

@@ -81,6 +81,32 @@ class ExecutionContext:
     """ReplySender —— 统一发送出口（send_raw / send_polished / 上下文注释）。"""
 
 
+def make_exec_ctx(
+    *,
+    ctx: Any,
+    store: Any,
+    scheduler: Any,
+    config: Any,
+    prompt_manager: Any | None = None,
+    prompt_service: Any | None = None,
+    sender: Any | None = None,
+) -> ExecutionContext:
+    """构造 ``ExecutionContext`` 依赖注入束（统一入口）。
+
+    所有构造点都应经此工厂拼装，避免各处手工构建时遗漏新增字段
+    （导致两个执行路径行为不一致）。
+    """
+    return ExecutionContext(
+        ctx=ctx,
+        store=store,
+        scheduler=scheduler,
+        config=config,
+        prompt_manager=prompt_manager,
+        prompt_service=prompt_service,
+        sender=sender,
+    )
+
+
 @dataclass(slots=True)
 class ExecutionResult:
     """单次任务执行的结构化结果。"""
