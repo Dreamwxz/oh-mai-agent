@@ -513,8 +513,15 @@ class AgentLoop:
                     elif name == "ask_user":
                         tool_result = await self._handle_ask_user(task, args)
                     else:
+                        # LLM 可能在 arguments 中夹带保留参数名（name/role），
+                        # 直接解包会导致 execute(name, role, **args) 关键字
+                        # 重复绑定抛 TypeError，这里剥离保留键。
+                        call_args = {
+                            k: v for k, v in args.items()
+                            if k not in ("name", "role")
+                        }
                         tool_result = await self._registry.execute(
-                            name, role, **args
+                            name, role, **call_args
                         )
 
                     logger.debug(
