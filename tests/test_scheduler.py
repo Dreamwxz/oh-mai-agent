@@ -433,10 +433,10 @@ class TestQuotaReservation:
         save_release = asyncio.Event()
         original_save = store.save
 
-        async def blocking_save(task: TaskRecord) -> None:
+        async def blocking_save(task: TaskRecord, **kwargs: object) -> None:
             save_started.set()
             await save_release.wait()
-            await original_save(task)
+            return await original_save(task)
 
         monkeypatch.setattr(store, "save", blocking_save)
         scheduler = TaskScheduler(task_config, store, _noop_executor, command_bus=command_bus)
@@ -461,7 +461,7 @@ class TestQuotaReservation:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """save 失败时任务回滚到 PENDING，不得卡死队首（F2 Finding 1）。"""
-        async def failing_save(task: TaskRecord) -> bool:
+        async def failing_save(task: TaskRecord, **kwargs: object) -> bool:
             raise RuntimeError("database unavailable")
 
         monkeypatch.setattr(store, "save", failing_save)
@@ -476,6 +476,42 @@ class TestQuotaReservation:
         assert t.id not in scheduler._running
         assert t.status == TaskStatus.PENDING
         assert scheduler._pending[0] is t
+
+    @pytest.mark.asyncio
+    async def test_try_start_cas_preemption_abandons_task(
+        self, store: TaskStore, task_config: TaskConfig, command_bus: Any,
+    ) -> None:
+        """两个调度器争抢同一 pending 任务：CAS 保证仅一个抢占成功，
+        另一个放弃执行（abandoned），任务不会被执行两次。
+
+        多 Runner（进程）并存的场景由 expected_status=PENDING 的原子写入兜底。
+        """
+        t = make_task("cas-preempt", level=TaskLevel.AGENT, status=TaskStatus.PENDING)
+        await store.save(t)
+
+        executed: list[str] = []
+
+        async def executor(task: TaskRecord) -> None:
+            executed.append(task.id)
+
+        s1 = TaskScheduler(task_config, store, executor, command_bus=command_bus)
+        s2 = TaskScheduler(task_config, store, executor, command_bus=command_bus)
+
+        # 两个调度器各自从 store 读取独立副本并放进自己的 pending 队列
+        # （模拟两个 Runner 进程同时读到同一 pending 任务）
+        s1._pending.append(t)
+        t2 = await store.get(t.id)
+        assert t2 is not None
+        s2._pending.append(t2)
+
+        await asyncio.gather(s1._try_dispatch(), s2._try_dispatch())
+
+        # 只有一个调度器真正启动执行
+        assert len(executed) == 1
+        assert len(s1._running) + len(s2._running) == 1
+        # 持久化状态为 RUNNING（被抢占者写入）
+        persisted = await store.get(t.id)
+        assert persisted is not None and persisted.status == TaskStatus.RUNNING
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1052,10 +1088,11 @@ class TestSchedulerErrorPaths:
         await scheduler._safe_execute(t, _cancel)  # 不应抛出
 
     @pytest.mark.asyncio
-    async def test_try_start_illegal_transition_returns_false(
+    async def test_try_start_illegal_transition_abandons_task(
         self, store: TaskStore, task_config: TaskConfig, command_bus: Any,
     ) -> None:
-        """pending 中任务已被并发取消 → 启动转换失败，任务回到队首。"""
+        """pending 中任务已被并发取消（内存已终态）→ 启动转换失败，
+        任务从调度队列移除（abandoned），不重试、不卡队首。"""
         scheduler = TaskScheduler(task_config, store, _noop_executor, command_bus=command_bus)
         t = make_task("race-1", status=TaskStatus.PENDING)
         await store.save(t)
@@ -1064,4 +1101,4 @@ class TestSchedulerErrorPaths:
 
         await scheduler._try_dispatch()
         assert scheduler._running == set()
-        assert any(x.id == "race-1" for x in scheduler._pending)
+        assert not any(x.id == "race-1" for x in scheduler._pending)

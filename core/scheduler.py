@@ -398,15 +398,18 @@ class TaskScheduler:
             return
         await self._do_on_task_completed(task)
 
-    async def _try_start(self, task: TaskRecord) -> bool:
+    async def _try_start(self, task: TaskRecord) -> str:
         """检查额度后启动任务。
 
         Returns:
-            是否成功启动（False 表示额度不足，任务留在 pending）。
+            ``"started"``：启动成功。
+            ``"retry"``：暂时无法启动（保存异常已回滚），任务应放回队列重试。
+            ``"abandoned"``：任务已不可由本调度器启动（CAS 抢占失败 / 状态
+            非法），应从调度队列移除、不重试。
         """
         # 1) 并发额度：_running 集合大小即当前占用额度，达到上限则任务留在 pending
         if len(self._running) >= self._config.max_concurrent_tasks:
-            return False
+            return "retry"
 
         # 2) 启动执行
         task.started_at = datetime.now()
@@ -414,14 +417,20 @@ class TaskScheduler:
             task.transition(TaskStatus.RUNNING)
         except Exception:
             logger.exception("任务 %s 转换到 RUNNING 状态失败", task.id)
-            return False
+            # 状态非法（通常为已被其他 Runner 置终态）→ 不再重试，避免每轮
+            # dispatch 都卡在同一任务上死循环。
+            return "abandoned"
 
         # 在第一个 await 之前同步预留额度：_try_dispatch 可能被检查循环、
         # 事件监听、enqueue、resume 并发调用，若等 save 完成后再 add，
         # 两个并发派发可同时通过额度检查 → 超过 max_concurrent_tasks。
         self._running.add(task.id)
         try:
-            await self._store.save(task)
+            # CAS 抢占：仅当持久化记录仍为 PENDING 时才写 RUNNING。
+            # 多 Runner（进程）并存时，多个调度器可能同时读到同一 pending 任务；
+            # expected_status 保证只有一个能抢占成功，其余放弃执行，
+            # 避免同一任务被并发执行多次（重复发消息/重复副作用）。
+            saved = await self._store.save(task, expected_status=TaskStatus.PENDING)
         except Exception:
             self._running.discard(task.id)
             logger.exception("任务 %s 保存 RUNNING 状态失败", task.id)
@@ -429,12 +438,22 @@ class TaskScheduler:
             # 重试时 transition(RUNNING) 因 running→running 非法抛异常，
             # 任务永久卡死队首，阻塞其后全部 pending 任务。
             task.force(TaskStatus.PENDING, actor="scheduler", reason="save_failed_rollback")
-            return False
+            return "retry"
+
+        if not saved:
+            # 抢占失败：另一个调度器（进程）已抢先启动该任务，
+            # 持久化记录已非 PENDING。放弃执行，不重试 —— 该任务由抢占者负责。
+            self._running.discard(task.id)
+            logger.info(
+                "任务 %s 启动被并发抢占（持久化已非 PENDING），放弃执行",
+                task.id,
+            )
+            return "abandoned"
 
         asyncio.create_task(self._safe_execute(task, self._executor))
 
         logger.info("任务 %s 已启动（level=%s, stream=%s）", task.id, task.level.value, task.stream_id)
-        return True
+        return "started"
 
     async def _safe_execute(
         self,
@@ -453,11 +472,14 @@ class TaskScheduler:
         """尝试从 pending 队列中取出任务并启动。
 
         按 priority 降序处理，直到额度满或 pending 队列为空。
+        ``_try_start`` 返回 ``"retry"`` 的任务放回队首（临时不可启动），
+        返回 ``"started"`` / ``"abandoned"`` 的继续处理下一个任务
+        （abandoned 多为 CAS 抢占失败，任务由其他 Runner 负责）。
         """
         while self._pending and len(self._running) < self._config.max_concurrent_tasks:
             task = self._pending.pop(0)
-            success = await self._try_start(task)
-            if not success:
+            outcome = await self._try_start(task)
+            if outcome == "retry":
                 # 放回队首（priority 高的优先重试）
                 self._pending.insert(0, task)
                 break
