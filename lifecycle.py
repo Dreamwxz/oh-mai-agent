@@ -6,8 +6,8 @@
 提供：
 - load_plugin — 原 on_load 体（初始化全部组件并恢复活跃任务）
 - apply_config_update — 原 on_config_update 体（配置热更新传播）
-- recover_active_tasks — 原 _recover_active_tasks（重启后恢复活跃任务）
-- reload_mcp_if_changed — 原 _reload_mcp_if_changed（MCP 配置热更新）
+- recover_active_tasks — 插件重启后恢复活跃任务（原 on_load 内联逻辑）
+- reload_mcp_if_changed — MCP 配置热更新（原 on_config_update 内联逻辑）
 - llm_title — 原 _llm_title（LLM 生成任务标题）
 """
 
@@ -237,7 +237,7 @@ async def llm_title(plugin: "MaibotAgentPlugin", intent: str) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 4. recover_active_tasks — 原 _recover_active_tasks 体
+# 4. recover_active_tasks — 原 on_load 内联恢复逻辑体
 # ═══════════════════════════════════════════════════════════════════════════
 
 async def recover_active_tasks(plugin: "MaibotAgentPlugin", logger: Any) -> None:
@@ -281,7 +281,7 @@ async def recover_active_tasks(plugin: "MaibotAgentPlugin", logger: Any) -> None
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 5. reload_mcp_if_changed — 原 _reload_mcp_if_changed 体
+# 5. reload_mcp_if_changed — 原 on_config_update 内联 MCP 重载逻辑体
 # ═══════════════════════════════════════════════════════════════════════════
 
 async def reload_mcp_if_changed(plugin: "MaibotAgentPlugin") -> None:

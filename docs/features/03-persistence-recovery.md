@@ -1,6 +1,6 @@
 # 持久化与恢复
 
-sqlite 持久化存储与插件重启后的活跃任务恢复。所有任务记录、执行历史、状态变更审计日志统一经 `TaskStore` 落盘到 `data_dir/tasks.db`；插件重启时由 `recover_active_tasks`（lifecycle.py:244-281）结合 `TaskRecovery` 决策器（domain/recovery.py:41-70）为每条活跃任务定恢复动作。
+sqlite 持久化存储与插件重启后的活跃任务恢复。所有任务记录、执行历史、状态变更审计日志统一经 `TaskStore` 落盘到 `data_dir/tasks.db`；插件重启时由 `recover_active_tasks`（lifecycle.py:244-281）结合 `TaskRecovery` 决策器（domain/recovery.py）为每条活跃任务定恢复动作。
 
 ## 设计目标（为什么需要持久化？）
 
@@ -54,7 +54,7 @@ sqlite 持久化存储与插件重启后的活跃任务恢复。所有任务记�
 
 加载序列（lifecycle.py:43-153）中，恢复发生在调度器启动之后、MCP 初始化之前：`load_plugin` 第 7 步调用 `recover_active_tasks(plugin, logger)`（lifecycle.py:119-120）。这个顺序保证恢复出的任务能立即进入调度队列。
 
-`recover_active_tasks`（lifecycle.py:244-281）先 `store.list_active()` 取全部非终态任务，逐条交给无状态的 `TaskRecovery.recover()`（domain/recovery.py:41-70）决策，再按动作执行：
+`recover_active_tasks`（lifecycle.py:244-281）先 `store.list_active()` 取全部非终态任务，逐条交给无状态的 `TaskRecovery.recover()`（domain/recovery.py）决策，再按动作执行：
 
 | 原状态 | 恢复动作 | 调用方行为 |
 |---|---|---|

@@ -1,6 +1,6 @@
 """TaskRecovery — 插件重启后活跃任务的恢复逻辑收口。
 
-将原先分散在 ``plugin._recover_active_tasks`` 和 ``scheduler.stop``
+将原先分散在插件生命周期方法与 ``scheduler.stop``
 中的恢复逻辑收敛为单一、可测试的决策函数。调用方根据返回的
 ``RecoveryAction`` 分别执行调度器入队 / 持久化保存等动作。
 """
@@ -34,8 +34,7 @@ class RecoveryAction(str, Enum):
 class TaskRecovery:
     """无状态的恢复决策器。
 
-    行为与 ``MaibotAgentPlugin._recover_active_tasks`` 中原有的内联
-    逻辑完全一致。
+    行为与插件原生命周期方法中的内联恢复逻辑完全一致。
     """
 
     @staticmethod

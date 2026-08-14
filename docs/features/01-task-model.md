@@ -73,7 +73,7 @@ cron 任务完成后经 `force()` 重置回 `scheduled` 等待下次触发（`co
 
 ### 重启恢复
 
-插件重启后，`TaskRecovery.recover()`（`domain/recovery.py:42-70`）按持久化状态决定恢复动作：SCHEDULED 重新入队等待定时器触发；RUNNING 经 `force()` 降级为 PENDING 重新排队并写入 `metadata["_recovered_from_running"]`；WAITING_INPUT 保持状态，旧 asyncio.Event 已随进程消失，等待用户通过 Hook 重新唤醒；PAUSED 与终态不做任何操作。
+插件重启后，`TaskRecovery.recover()`（`domain/recovery.py`）按持久化状态决定恢复动作：SCHEDULED 重新入队等待定时器触发；RUNNING 经 `force()` 降级为 PENDING 重新排队并写入 `metadata["_recovered_from_running"]`；WAITING_INPUT 保持状态，旧 asyncio.Event 已随进程消失，等待用户通过 Hook 重新唤醒；PAUSED 与终态不做任何操作。
 
 ## 使用与配置
 

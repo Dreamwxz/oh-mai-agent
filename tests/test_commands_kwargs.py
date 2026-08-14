@@ -4,7 +4,7 @@ MaiBot 命令执行器（component_query.py:474-556）传入的 kwargs 包含以
   text, stream_id, group_id, platform, user_id, is_local_operator,
   matched_groups, message, plugin_config
 
-它不传入 "plain_text" 键。插件的 _cmd_* 方法必须从 "text"（完整消息）
+它不传入 "plain_text" 键。插件的命令处理方法必须从 "text"（完整消息）
 和 "matched_groups"（正则分组）中提取参数。
 """
 
@@ -18,6 +18,15 @@ import pytest_asyncio
 from conftest import MockCtx, make_task
 
 from oh_mai_agent.config import PermissionConfig
+from oh_mai_agent.commands import (
+    cmd_arg,
+    cmd_ask,
+    cmd_cancel,
+    cmd_create,
+    cmd_history,
+    cmd_status,
+    cmd_text,
+)
 from oh_mai_agent.domain.status_formatter import StatusFormatter
 from oh_mai_agent.permission import PermissionResolver, Role
 from oh_mai_agent.plugin import MaibotAgentPlugin
@@ -544,30 +553,30 @@ class TestCmdAsk:
 
 
 class TestCmdTextHelper:
-    """直接测试 _cmd_text 与 _cmd_arg 辅助方法。"""
+    """直接测试 commands.py 的 cmd_text / cmd_arg 辅助函数。"""
 
-    def test_cmd_text_prefers_text_key(self, plugin: MaibotAgentPlugin) -> None:
-        result = plugin._cmd_text(text="/maitask list", plain_text="/ignored")
+    def test_cmd_text_prefers_text_key(self) -> None:
+        result = cmd_text(text="/maitask list", plain_text="/ignored")
         assert result == "/maitask list"
 
-    def test_cmd_text_falls_back_to_plain_text(self, plugin: MaibotAgentPlugin) -> None:
-        result = plugin._cmd_text(plain_text="/maitask list")
+    def test_cmd_text_falls_back_to_plain_text(self) -> None:
+        result = cmd_text(plain_text="/maitask list")
         assert result == "/maitask list"
 
-    def test_cmd_text_empty(self, plugin: MaibotAgentPlugin) -> None:
-        result = plugin._cmd_text()
+    def test_cmd_text_empty(self) -> None:
+        result = cmd_text()
         assert result == ""
 
-    def test_cmd_arg_extracts_group(self, plugin: MaibotAgentPlugin) -> None:
-        result = plugin._cmd_arg({"matched_groups": {1: "t123"}}, 1)
+    def test_cmd_arg_extracts_group(self) -> None:
+        result = cmd_arg({"matched_groups": {1: "t123"}}, 1)
         assert result == "t123"
 
-    def test_cmd_arg_missing_group(self, plugin: MaibotAgentPlugin) -> None:
-        result = plugin._cmd_arg({"matched_groups": {}}, 1, default="fallback")
+    def test_cmd_arg_missing_group(self) -> None:
+        result = cmd_arg({"matched_groups": {}}, 1, default="fallback")
         assert result == "fallback"
 
-    def test_cmd_arg_no_matched_groups(self, plugin: MaibotAgentPlugin) -> None:
-        result = plugin._cmd_arg({}, 1)
+    def test_cmd_arg_no_matched_groups(self) -> None:
+        result = cmd_arg({}, 1)
         assert result == ""
 
 
@@ -686,7 +695,7 @@ class TestCmdFailurePaths:
         self, plugin: MaibotAgentPlugin, base_kwargs: dict[str, Any],
     ) -> None:
         plugin._task_manager.create_task = AsyncMock(return_value=(False, "boom"))  # type: ignore[method-assign]
-        ok, reply, code = await plugin._cmd_create(**base_kwargs)
+        ok, reply, code = await cmd_create(plugin, **base_kwargs)
         assert ok is False
         assert "创建失败: boom" in reply
         assert code == 2
@@ -697,7 +706,7 @@ class TestCmdFailurePaths:
     ) -> None:
         base_kwargs = {**base_kwargs, "text": "/maitask status task-1"}
         plugin._task_manager.get_task = AsyncMock(return_value=(False, "not found"))  # type: ignore[method-assign]
-        ok, reply, _ = await plugin._cmd_status(**base_kwargs)
+        ok, reply, _ = await cmd_status(plugin, **base_kwargs)
         assert ok is False
         assert "查询失败: not found" in reply
 
@@ -707,7 +716,7 @@ class TestCmdFailurePaths:
     ) -> None:
         base_kwargs = {**base_kwargs, "text": "/maitask cancel task-1"}
         plugin._task_manager.cancel_task = AsyncMock(return_value=(False, "boom"))  # type: ignore[method-assign]
-        ok, reply, _ = await plugin._cmd_cancel(**base_kwargs)
+        ok, reply, _ = await cmd_cancel(plugin, **base_kwargs)
         assert ok is False
         assert "取消失败: boom" in reply
 
@@ -717,7 +726,7 @@ class TestCmdFailurePaths:
     ) -> None:
         base_kwargs = {**base_kwargs, "text": "/maitask history task-1"}
         plugin._task_manager.task_history = AsyncMock(return_value=(False, "boom"))  # type: ignore[method-assign]
-        ok, reply, _ = await plugin._cmd_history(**base_kwargs)
+        ok, reply, _ = await cmd_history(plugin, **base_kwargs)
         assert ok is False
         assert "查询历史失败: boom" in reply
 
@@ -727,7 +736,7 @@ class TestCmdFailurePaths:
     ) -> None:
         base_kwargs = {**base_kwargs, "text": "/maitask history task-1"}
         plugin._task_manager.task_history = AsyncMock(return_value=(True, []))  # type: ignore[method-assign]
-        ok, reply, _ = await plugin._cmd_history(**base_kwargs)
+        ok, reply, _ = await cmd_history(plugin, **base_kwargs)
         assert ok is True
         assert "该任务暂无历史记录。" in reply
 
@@ -737,7 +746,7 @@ class TestCmdFailurePaths:
     ) -> None:
         base_kwargs = {**base_kwargs, "text": "/maitask ask task-1 继续"}
         plugin._task_manager.modify_task = AsyncMock(return_value=(False, "boom"))  # type: ignore[method-assign]
-        ok, reply, _ = await plugin._cmd_ask(**base_kwargs)
+        ok, reply, _ = await cmd_ask(plugin, **base_kwargs)
         assert ok is False
         assert "注入失败: boom" in reply
 
@@ -747,6 +756,6 @@ class TestCmdFailurePaths:
     ) -> None:
         """platform 缺省时从 stream_id 推断（覆盖 resolve_caller 推断分支）。"""
         kwargs = {**base_kwargs, "platform": ""}
-        ok, _, _ = await plugin._cmd_create(**kwargs)
+        ok, _, _ = await cmd_create(plugin, **kwargs)
         assert ok is True
         assert plugin._task_manager.created[-1]["platform"] == "qq"

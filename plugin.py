@@ -2,7 +2,7 @@
 
 MaiBot SDK 插件主入口，实现 MaibotAgentPlugin 类，提供：
 - 生命周期管理（on_load / on_unload / on_config_update）
-- 暴露给主 Planner 的安全子集 Tool（9 个工具：7 个任务管理 + search_users + send_message）
+- 暴露给主 Planner 的安全子集 Tool（11 个工具：7 个任务管理 + search_users + send_message + 2 个 MCP 代理）
 - /maitask 命令组（7 个 Command，含兜底帮助命令）
 - 用户回复监听（HookHandler chat.receive.after_process）
 - Planner 摘要注入 Hook（HookHandler，委托 PlannerBoard）
@@ -20,8 +20,8 @@ from maibot_sdk import Command, HookHandler, MaiBotPlugin, Tool
 from maibot_sdk.types import HookMode, HookOrder, ToolParameterInfo, ToolParamType
 
 from .config import MaibotAgentConfig
-from .commands import cmd_arg, cmd_ask, cmd_cancel, cmd_create, cmd_fallback, cmd_history, cmd_list, cmd_status, cmd_text
-from .lifecycle import apply_config_update, llm_title as llm_title_fn, load_plugin, recover_active_tasks, reload_mcp_if_changed
+from .commands import cmd_ask, cmd_cancel, cmd_create, cmd_fallback, cmd_history, cmd_list, cmd_status
+from .lifecycle import apply_config_update, llm_title as llm_title_fn, load_plugin
 
 logger = logging.getLogger(__name__)
 
@@ -82,28 +82,6 @@ class MaibotAgentPlugin(MaiBotPlugin):
     async def _llm_title(self, intent: str) -> str:
         """调用 LLM 生成一句话任务标题；失败时降级为 intent[:40]."""
         return await llm_title_fn(self, intent)
-
-    # ═══════════════════════════════════════════════════════════════════════
-    # 内部：任务恢复
-    # ═══════════════════════════════════════════════════════════════════════
-
-    async def _recover_active_tasks(self, logger: Any) -> None:
-        """恢复插件重启前未完成的活跃任务。
-
-        - SCHEDULED：重新入队等待定时触发。
-        - RUNNING：降级为 PENDING 重新排队（Agent 上下文丢失，续跑重新开始）。
-        - WAITING_INPUT：保持状态，chat.receive.after_process Hook 收到用户回复时恢复。
-        """
-        await recover_active_tasks(self, logger)
-
-    async def _reload_mcp_if_changed(self) -> None:
-        """MCP 配置变更时重启 MCP 管理器。
-
-        比较当前 self.config.mcp 与记录的上次 _mcp_config；若相同则跳过。
-        若变更则停止旧 MCP、用新配置重建、重新注册工具到 registry。
-        registry.register 对同名工具直接覆盖，无需显式 unregister。
-        """
-        await reload_mcp_if_changed(self)
 
     # ═══════════════════════════════════════════════════════════════════════
     # 内部：Planner Tool 懒构建
@@ -470,7 +448,7 @@ class MaibotAgentPlugin(MaiBotPlugin):
         aliases=["/mt create"],
     )
     async def cmd_task_create(self, **kwargs: Any) -> tuple[bool, str, int]:
-        return await self._cmd_create(**kwargs)
+        return await cmd_create(self, **kwargs)
 
     @Command(
         "maitask_list",
@@ -479,7 +457,7 @@ class MaibotAgentPlugin(MaiBotPlugin):
         aliases=["/mt list"],
     )
     async def cmd_task_list(self, **kwargs: Any) -> tuple[bool, str, int]:
-        return await self._cmd_list(**kwargs)
+        return await cmd_list(self, **kwargs)
 
     @Command(
         "maitask_status",
@@ -488,7 +466,7 @@ class MaibotAgentPlugin(MaiBotPlugin):
         aliases=["/mt status"],
     )
     async def cmd_task_status(self, **kwargs: Any) -> tuple[bool, str, int]:
-        return await self._cmd_status(**kwargs)
+        return await cmd_status(self, **kwargs)
 
     @Command(
         "maitask_cancel",
@@ -497,7 +475,7 @@ class MaibotAgentPlugin(MaiBotPlugin):
         aliases=["/mt cancel"],
     )
     async def cmd_task_cancel(self, **kwargs: Any) -> tuple[bool, str, int]:
-        return await self._cmd_cancel(**kwargs)
+        return await cmd_cancel(self, **kwargs)
 
     @Command(
         "maitask_history",
@@ -506,7 +484,7 @@ class MaibotAgentPlugin(MaiBotPlugin):
         aliases=["/mt history"],
     )
     async def cmd_task_history(self, **kwargs: Any) -> tuple[bool, str, int]:
-        return await self._cmd_history(**kwargs)
+        return await cmd_history(self, **kwargs)
 
     @Command(
         "maitask_ask",
@@ -515,7 +493,7 @@ class MaibotAgentPlugin(MaiBotPlugin):
         aliases=["/mt ask"],
     )
     async def cmd_task_ask(self, **kwargs: Any) -> tuple[bool, str, int]:
-        return await self._cmd_ask(**kwargs)
+        return await cmd_ask(self, **kwargs)
 
     @Command(
         "maitask_help_fallback",
@@ -525,52 +503,6 @@ class MaibotAgentPlugin(MaiBotPlugin):
     async def cmd_zz_task_fallback(self, **kwargs: Any) -> tuple[bool, str, int]:
         """兜底：任何 /maitask 开头的输入都显示帮助并拦截，避免落入 Maisaka planner。"""
         return await cmd_fallback(self, **kwargs)
-
-    # ── Command 参数提取辅助 ──────────────────────────────────────────
-
-    @staticmethod
-    def _cmd_text(**kwargs: Any) -> str:
-        """提取完整命令消息文本（兼容 text / plain_text 两种键名）。
-
-        MaiBot 命令执行器传 text（processed_plain_text），但部分旧代码用 plain_text。
-        优先取 text，回退 plain_text。
-        """
-        return cmd_text(**kwargs)
-
-    @staticmethod
-    def _cmd_arg(kwargs: dict[str, Any], index: int, default: str = "") -> str:
-        """从 matched_groups 提取第 index 个正则组；缺失则返回 default。
-
-        matched_groups 可能是 {0: 全文, 1: 第一组...} 或 {group_name: ...}。
-        当正则组不存在时返回 default，调用方自行回退到文本解析。
-        """
-        return cmd_arg(kwargs, index, default)
-
-    # ── Command 内部实现 ────────────────────────────────────────────────
-
-    async def _cmd_create(self, **kwargs: Any) -> tuple[bool, str, int]:
-        """处理 /maitask create <意图描述>."""
-        return await cmd_create(self, **kwargs)
-
-    async def _cmd_list(self, **kwargs: Any) -> tuple[bool, str, int]:
-        """处理 /maitask list [状态]."""
-        return await cmd_list(self, **kwargs)
-
-    async def _cmd_status(self, **kwargs: Any) -> tuple[bool, str, int]:
-        """处理 /maitask status <id>."""
-        return await cmd_status(self, **kwargs)
-
-    async def _cmd_cancel(self, **kwargs: Any) -> tuple[bool, str, int]:
-        """处理 /maitask cancel <id>."""
-        return await cmd_cancel(self, **kwargs)
-
-    async def _cmd_history(self, **kwargs: Any) -> tuple[bool, str, int]:
-        """处理 /maitask history [<id>]."""
-        return await cmd_history(self, **kwargs)
-
-    async def _cmd_ask(self, **kwargs: Any) -> tuple[bool, str, int]:
-        """处理 /maitask ask <id> <指令>."""
-        return await cmd_ask(self, **kwargs)
 
     # ═══════════════════════════════════════════════════════════════════════
     # @HookHandler：监听用户回复，唤醒 waiting_input 任务

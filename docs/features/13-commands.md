@@ -20,10 +20,10 @@
 
 ```python
 async def cmd_task_create(self, **kwargs: Any) -> tuple[bool, str, int]:
-    return await self._cmd_create(**kwargs)
+    return await cmd_create(self, **kwargs)
 ```
 
-薄壳本身不含任何业务逻辑。真正的实现在 `commands.py` 的模块级函数里（`cmd_create` / `cmd_list` / `cmd_status` / `cmd_cancel` / `cmd_history` / `cmd_ask` / `cmd_fallback`），plugin.py 的 `_cmd_*` 包装只是转发。这样做的原因是把命令处理从插件类中剥离出来，保持 plugin.py 只做注册与接线。
+薄壳本身不含任何业务逻辑。真正的实现在 `commands.py` 的模块级函数里（`cmd_create` / `cmd_list` / `cmd_status` / `cmd_cancel` / `cmd_history` / `cmd_ask` / `cmd_fallback`），`@Command` 方法体只有一行直接委托。这样做的原因是把命令处理从插件类中剥离出来，保持 plugin.py 只做注册与接线。
 
 命令与 @Tool 是任务管理的两条平行入口：@Tool 面向主 Planner（Planner 经 LLM 决策调用，调用者恒为 ADMIN），`/maitask` 命令面向聊天流里的真实用户（调用者角色由权限配置决定）。两者最终都汇聚到同一个 `TaskManager` 门面，因此对任务的操作语义完全一致，只是入口和权限来源不同。
 
@@ -39,7 +39,7 @@ async def cmd_task_create(self, **kwargs: Any) -> tuple[bool, str, int]:
 
 所有 handler 的返回值都是 `(bool, str, int)` 三元组：成功与否、回复文本、拦截级别 2。
 
-以 `/maitask create 帮我查天气` 为例，完整链路是：SDK 按注册顺序匹配 `^/maitask\s+create\b` → 调用 `cmd_task_create` 薄壳 → `_cmd_create` 转发 `cmd_create` → `resolve_caller` 解析角色 → `require(role, Role.USER)` 权限检查 → `plugin._task_manager.create_task` → TaskCrud 落库并 `scheduler.enqueue()` → `cmd_reply` 把任务摘要发回聊天流。整条链路不经过 LLM，任何一步失败都返回确定性的中文错误文案。
+以 `/maitask create 帮我查天气` 为例，完整链路是：SDK 按注册顺序匹配 `^/maitask\s+create\b` → 调用 `cmd_task_create` 薄壳 → `cmd_create` 直接执行 → `resolve_caller` 解析角色 → `require(role, Role.USER)` 权限检查 → `plugin._task_manager.create_task` → TaskCrud 落库并 `scheduler.enqueue()` → `cmd_reply` 把任务摘要发回聊天流。整条链路不经过 LLM，任何一步失败都返回确定性的中文错误文案。
 
 ### 门面委托与底层归属
 
