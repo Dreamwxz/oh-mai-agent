@@ -42,7 +42,7 @@ class TestSubAgentConfig:
         assert cfg.max_result_chars == 0
 
     def test_ui_order(self) -> None:
-        assert SubAgentConfig.__ui_order__ == 9
+        assert SubAgentConfig.__ui_order__ == 10
 
     def test_ui_label(self) -> None:
         assert SubAgentConfig.__ui_label__ == "子Agent"

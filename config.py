@@ -248,6 +248,24 @@ class SplitterConfig(PluginConfigBase):
     )
 
 
+class SendConfig(PluginConfigBase):
+    """回复发送配置。"""
+
+    __ui_label__ = "发送"
+    __ui_order__ = 6
+
+    max_retries: int = Field(
+        default=3,
+        ge=1,
+        description="消息发送最大重试次数（指数退避 1s→2s），超过后放弃发送并抛异常",
+        json_schema_extra={
+            "label": "发送重试次数",
+            "hint": "消息发送最大重试次数（指数退避 1s→2s），超过后放弃发送并抛异常",
+            "order": 0,
+        },
+    )
+
+
 class MCPServerConfig(PluginConfigBase):
     """单个 MCP 服务器配置。"""
 
@@ -320,7 +338,7 @@ class MCPConfig(PluginConfigBase):
     """MCP 协议配置。"""
 
     __ui_label__ = "MCP"
-    __ui_order__ = 6
+    __ui_order__ = 7
 
     enabled: bool = Field(
         default=True,
@@ -376,7 +394,7 @@ class ApiExposeConfig(PluginConfigBase):
     """API 暴露等级配置。"""
 
     __ui_label__ = "API暴露"
-    __ui_order__ = 7
+    __ui_order__ = 8
 
     max_level: Literal["guest", "user", "admin"] = Field(
         default="user",
@@ -393,7 +411,7 @@ class SearchConfig(PluginConfigBase):
     """搜索配置。"""
 
     __ui_label__ = "搜索"
-    __ui_order__ = 8
+    __ui_order__ = 9
 
     max_results: int = Field(
         default=20,
@@ -410,7 +428,7 @@ class SubAgentConfig(PluginConfigBase):
     """子 Agent 配置。"""
 
     __ui_label__ = "子Agent"
-    __ui_order__ = 9
+    __ui_order__ = 10
 
     enabled: bool = Field(
         default=True,
@@ -517,6 +535,10 @@ class MaibotAgentConfig(PluginConfigBase):
     splitter: SplitterConfig = Field(
         default_factory=SplitterConfig,
         description="回复分割配置",
+    )
+    send: SendConfig = Field(
+        default_factory=SendConfig,
+        description="回复发送配置",
     )
     mcp: MCPConfig = Field(
         default_factory=MCPConfig,
