@@ -9,7 +9,7 @@
 
 工具集规则（默认允许集）：当前角色可见的全部工具，排除精确名
 ``ask_user`` / ``send_message`` / ``list_my_tasks`` / ``create_subtask`` /
-``inject_task`` / ``ask_subagent`` / ``ask_subagents`` / ``list_plugin_tools`` /
+``inject_task`` / ``ask_subagent`` / ``ask_subagents`` /
 ``run_command`` 与 ``call_`` 前缀（跨插件 API 工具）；MCP 工具（``mcp_`` 前缀）包含。
 
 ``tools`` 参数可选：缺省/为空 → 默认允许集；传入时必须为默认允许集的子集，
@@ -38,7 +38,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # 子 Agent 不可见的工具精确名集合（防绕过：不能发消息、反问用户、管理任务、
-# 跨插件 API、再派生子 Agent、执行宿主机命令或经 list_plugin_tools 动态发现）。
+# 跨插件 API、再派生子 Agent 或执行宿主机命令）。
 _SUBAGENT_EXCLUDED = frozenset({
     "ask_user",
     "send_message",
@@ -47,7 +47,6 @@ _SUBAGENT_EXCLUDED = frozenset({
     "inject_task",
     "ask_subagent",
     "ask_subagents",
-    "list_plugin_tools",
     "run_command",
 })
 

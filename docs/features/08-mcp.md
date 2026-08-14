@@ -49,13 +49,14 @@ Agent 循环的工具体系（`tools/`，见 [工具系统](./05-tools.md)）只
 调用时经 `call_tool(server, name, arguments)`（`provider.py:141`）路由到对应服务器连接，返回
 统一的 `{"success": ...}` 结构。
 
-### 工具注册进 ToolRegistry，走 Agent 循环 discoverable 层
+### 工具注册进 ToolRegistry，Agent 循环直接可见
 
 `build_tool_definitions()`（`provider.py:167`）把每条 MCP 工具转为 `ToolDefinition`：工具名加
 `mcp_{server}_{tool}` 前缀避免与内置工具冲突，`visibility="discoverable"`、`min_role=Role.USER`
-（`provider.py:180-204`）。也就是说 MCP 工具**不直接携带 schema 常驻**，Agent 经合成工具
-`list_tools` / `get_tool_schema`（`tools/synthetic/discovery.py`）按需发现后调用，与所有
-discoverable 层工具行为一致（详见 [工具系统](./05-tools.md) 的两级呈现模型）。
+（`provider.py:180-204`）。Agent 循环每轮**直接全量暴露**当前角色可见的工具（含 MCP 工具，
+`executor/agent_loop.py` 的 `_build_tool_schemas`），LLM 直接看到 `mcp_fetch_fetch` /
+`mcp_exa_web_search_exa` 这类真实名称并调用，无需经 `list_tools` / `get_tool_schema`
+发现仪式（该通道已降级为兜底，详见 [工具系统](./05-tools.md) 的呈现模型）。
 
 插件组装在 `lifecycle.py`：第 8 步（`lifecycle.py:122-129`）创建 `MCPManager`、启动、构建
 `ToolDefinition` 并逐条 `registry.register(td)` 注册进 `ToolRegistry`。配置热更新时
@@ -135,8 +136,8 @@ exa 启用且用户列表无同名或同 URL 条目时加入，fetch 启用且�
 
 ### 使用路径
 
-注册成功后，Agent 在循环中经 `list_tools` 看到 `mcp_filesystem_read_file` 这类条目，
-`get_tool_schema` 取到完整参数 Schema，调用时 `ToolRegistry.execute` → `MCPManager.call_tool`
+注册成功后，Agent 在循环中直接看到 `mcp_filesystem_read_file` 这类工具的完整 schema（角色过滤后
+直接进入 `tools` 参数），调用时 `ToolRegistry.execute` → `MCPManager.call_tool`
 → `MCPConnection.call_tool` → JSON-RPC `tools/call` 到 MCP 服务器（`connection.py:420`）。
 外部工具由此获得与内置工具一致的发现、权限（USER 起）与调用体验。
 

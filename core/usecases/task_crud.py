@@ -87,6 +87,11 @@ class TaskCrud:
             scheduled_at=None, priority=priority, reply_stream_id=reply_stream_id,
             created_at=datetime.now(), updated_at=datetime.now(),
         )
+        # 持久化创建者角色：执行期角色解析（make_role_provider）在 owner 为
+        # 会话 UUID 等无法映射平台/用户形态时无法还原创建者权限（会回落 guest，
+        # 导致 MCP 等 user+ 工具不可见）。planner / API 创建者均为 ADMIN，
+        # 任务理应以创建者角色执行。
+        task.metadata["_caller_role"] = caller_role.value
         await self._store.save(task)
         await self._scheduler.enqueue(task)
         logger.info(

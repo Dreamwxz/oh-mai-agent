@@ -159,7 +159,13 @@ async def test_user_agent_wiring_preserves_user_tool_visibility(real_store: Task
 
 
 @pytest.mark.asyncio
-async def test_guest_agent_wiring_preserves_guest_tool_visibility(real_store: TaskStore) -> None:
+async def test_agent_wiring_runs_with_creator_role_and_direct_tools(real_store: TaskStore) -> None:
+    """任务以创建者角色执行（_caller_role 持久化），且工具全量直接暴露。
+
+    owner=qq:30001 解析为 guest，但创建者 caller_role=USER → 任务以 USER 执行，
+    USER 可见工具（ask_user/send_message/read）全部直接暴露在 schema 中；
+    不再有 list_tools / get_tool_schema 发现仪式。
+    """
     ctx = MockCtx()
     manager = await _make_manager(
         real_store,
@@ -170,8 +176,8 @@ async def test_guest_agent_wiring_preserves_guest_tool_visibility(real_store: Ta
 
     names = await _schemas_for_role(manager, ctx, "qq:30001", Role.USER)
 
-    assert "list_tools" in names
-    assert "get_tool_schema" in names
-    assert "ask_user" not in names
-    assert "send_message" not in names
-    assert "read" not in names
+    # 直接全量暴露：无发现仪式工具
+    assert "list_tools" not in names
+    assert "get_tool_schema" not in names
+    # 创建者角色 USER → USER 可见工具全部直接暴露（含原 guest 测试中不可见的工具）
+    assert {"ask_user", "send_message", "read"} <= names

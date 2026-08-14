@@ -13,8 +13,9 @@ oh-mai-agent 是 MaiBot 的离线多线程 Agent 插件（Python ≥ 3.10，插�
 
 **任务分级与两级工具模型**。离线任务要区分「一次即时动作」和「长时自主循环」，故 TaskLevel
 枚举（`domain/task_record.py:26-29`）定义 `instant` / `agent` 两级。工具呈现同理分两层：
-Essential 层仅 `ask_user`（始终可见）；Discoverable 层按需发现，Agent 循环经合成工具
-`list_tools` / `get_tool_schema`（`tools/synthetic/discovery.py`）动态获取。主 Planner 只见
+Essential 层仅 `ask_user`（始终可见）；Discoverable 层按角色过滤后由 Agent 循环**直接全量
+暴露**（每轮全部进 `tools` 参数，LLM 看到真实工具名如 `mcp_fetch_fetch`；`list_tools` /
+`get_tool_schema` 合成发现工具降级为兜底，`tools/synthetic/discovery.py`）。主 Planner 只见
 11 个 @Tool 安全子集（`tools/planner/` handler 工厂 + `plugin.py` 注册）。
 
 **命令总线与调度链**。任务执行需要跨组件协作（注入指令、唤醒、取消、暂停），故有

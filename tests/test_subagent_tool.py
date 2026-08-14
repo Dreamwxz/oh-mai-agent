@@ -1,7 +1,7 @@
 """ask_subagent / ask_subagents 工具测试。
 
 覆盖（对应 plan todo 5 acceptance）：
-- 默认允许集 = 信息+文件+MCP 工具，不含 8 个排除名与 call_ 前缀
+- 默认允许集 = 信息+文件+MCP 工具，不含 7 个排除名与 call_ 前缀
 - tools 覆盖为合法子集可用；非法名严格拒绝（整体拒绝，不静默过滤）
 - 空 intent 拒绝；intents 为空/超限拒绝
 - 批量成功合并格式与 per-item 字段；批量中一项失败其余仍返回且 top-level
@@ -25,7 +25,7 @@ from oh_mai_agent.tools.agent.subagent_tool import (
 )
 from oh_mai_agent.tools.registry import ToolDefinition, ToolRegistry
 
-# 与实现保持一致的 8 个排除名（防绕过：发消息/反问/任务管理/递归/发现）
+# 与实现保持一致的 7 个排除名（防绕过：发消息/反问/任务管理/递归/宿主命令）
 _EXCLUDED_NAMES = {
     "ask_user",
     "send_message",
@@ -34,7 +34,6 @@ _EXCLUDED_NAMES = {
     "inject_task",
     "ask_subagent",
     "ask_subagents",
-    "list_plugin_tools",
 }
 
 
@@ -43,7 +42,7 @@ async def _ok_handler(**kwargs: Any) -> dict:
 
 
 def _make_registry() -> ToolRegistry:
-    """构造样例注册表：8 个排除名 + call_ 前缀 + MCP + 信息 + 文件 + admin 专用。"""
+    """构造样例注册表：7 个排除名 + call_ 前缀 + MCP + 信息 + 文件 + admin 专用。"""
     reg = ToolRegistry()
     for name in sorted(_EXCLUDED_NAMES):
         reg.register(ToolDefinition(name=name, description="x", parameters={}, handler=_ok_handler))
@@ -88,8 +87,8 @@ def _schema_names(ctx) -> set[str]:
 # ── 默认允许集与排除规则 ───────────────────────────────────────────────────
 
 
-def test_default_set_excludes_8_names_and_call_prefix() -> None:
-    """USER 角色下默认集 = 信息+文件+MCP，不含 8 个排除名与 call_ 前缀。"""
+def test_default_set_excludes_7_names_and_call_prefix() -> None:
+    """USER 角色下默认集 = 信息+文件+MCP，不含 7 个排除名与 call_ 前缀。"""
     names = _default_tool_names(Role.USER)
     assert names == {"search_memory", "fetch_history", "read", "write", "mcp_fetch_page"}
     assert names.isdisjoint(_EXCLUDED_NAMES)

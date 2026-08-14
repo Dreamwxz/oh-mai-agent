@@ -67,9 +67,9 @@ def registry(
     """真实 ToolRegistry：样例工具集 + 真实 ask_subagent 工具。
 
     工具集覆盖三类：
-      - 被排除（8 个精确名 + call_ 前缀）：ask_user / send_message /
-        list_my_tasks / create_subtask / inject_task / list_plugin_tools /
-        call_plugin_api
+      - 被排除（7 个精确名 + call_ 前缀）：ask_user / send_message /
+        list_my_tasks / create_subtask / inject_task / ask_subagent /
+        ask_subagents / call_plugin_api
       - 合法信息/文件/MCP 工具：search_memory / read / mcp_search
       - ask_subagent 自身（防递归）
     """
@@ -91,7 +91,7 @@ def registry(
         name="send_message", description="发送消息", parameters={"type": "object", "properties": {}},
         handler=_send_message, visibility="essential", min_role=Role.USER,
     ))
-    for name in ("list_my_tasks", "create_subtask", "inject_task", "list_plugin_tools"):
+    for name in ("list_my_tasks", "create_subtask", "inject_task"):
         reg.register(ToolDefinition(
             name=name, description=name, parameters={"type": "object", "properties": {}},
             handler=_noop_handler, visibility="discoverable", min_role=Role.USER,
@@ -193,7 +193,7 @@ class TestSubAgentSchemaExclusion:
     ) -> None:
         """ask_subagent 内部那次 generate_with_tools 的 tools 参数
         （MockLLM 记录于 call_history）不含：
-          - 8 个精确名（ask_user/send_message/任务管理/ask_subagent 等）
+          - 7 个精确名（ask_user/send_message/任务管理/ask_subagent 等）
           - call_ 前缀（跨插件 API）
           - list_tools / get_tool_schema（无动态发现）
         且合法信息/文件/MCP 工具仍在。
@@ -217,7 +217,7 @@ class TestSubAgentSchemaExclusion:
 
         excluded = {
             "ask_user", "send_message", "list_my_tasks", "create_subtask",
-            "inject_task", "ask_subagent", "ask_subagents", "list_plugin_tools",
+            "inject_task", "ask_subagent", "ask_subagents",
         }
         assert names.isdisjoint(excluded), f"子 Agent schema 泄漏被排除工具：{names & excluded}"
         assert not any(n.startswith("call_") for n in names), (

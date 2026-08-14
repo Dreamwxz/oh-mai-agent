@@ -1,37 +1,37 @@
 # 工具系统
 
-本文档讲述工具系统的设计逻辑：为什么 Agent 循环需要两级工具呈现，工具如何注册与发现，以及 agent 循环、planner、synthetic 三个通道如何分工。
+本文档讲述工具系统的设计逻辑：Agent 循环如何呈现与调用工具、工具如何注册与按角色过滤，以及 agent 循环、planner、synthetic 三个通道如何分工。
 
 ## 设计目标
 
-Agent 级任务的核心是 LLM 推理加工具调用。每轮 LLM 调用都要把工具 schema 放进 `tools` 参数，schema 越多，token 成本越高，LLM 的注意力也越分散。如果把所有工具都常驻上下文，几十个 schema 会挤占本就有限的上下文窗口。
+Agent 级任务的核心是 LLM 推理加工具调用。每轮 LLM 调用都要把工具 schema 放进 `tools` 参数，schema 越多，token 成本越高，LLM 的注意力也越分散。工具数量受角色过滤约束：guest 只见查询类，admin 见全部，规模始终可控。
 
 同时，工具是 Agent 触达外部世界的唯一通道，权限边界必须清晰。不同角色（guest / user / admin）能看到的工具不同，主 Planner 与 Agent 循环能调用的工具也不同。
 
 所以工具系统要解决两个问题：
 
-1. **上下文控制**：常驻工具数量必须受控，其余工具按需发现。
-2. **安全隔离**：工具按角色过滤，危险工具只对高权限角色、只在 Agent 循环内可见。
+1. **可用性优先**：Agent 循环**直接全量暴露**当前角色可见的工具（Essential + Discoverable 全部进 `tools` 参数），让 LLM 看到真实可调用的工具名（如 `mcp_fetch_fetch`），避免「发现结果与可调用集不一致」导致的 tool-not-found 空转。
+2. **安全隔离**：工具按角色过滤，危险工具只对高权限角色可见。
 
-> 架构变更：v0.1.0 曾尝试把 instant 任务迁到独立子进程（WorkerManager + StdioTransport），后因复杂度与收益不匹配，回退到进程内 contextvars + usecase 分层。工具系统随之全部留在 Runner 进程内；合成发现工具的逻辑体也从 `executor/agent_loop.py` 迁出，独立成 `tools/synthetic/discovery.py` 通道。
+> 架构变更：v0.1.0 曾尝试把 instant 任务迁到独立子进程（WorkerManager + StdioTransport），后因复杂度与收益不匹配，回退到进程内 contextvars + usecase 分层。工具系统随之全部留在 Runner 进程内；早期依赖 list_tools / get_tool_schema 按需发现的呈现方式已改为直接全量暴露（合成发现工具降级为兜底，见下文）。
 
 ## 设计方案
 
-### 两级呈现：Essential 常驻，Discoverable 按需
+### 两级呈现：Essential 与 Discoverable 均直接暴露
 
 每个工具是一个 `ToolDefinition`（tools/registry.py:25-70），携带名称、描述、参数 JSON Schema、异步 handler，以及两个控制字段：`visibility`（essential / discoverable）和 `min_role`（最低调用角色）。
 
-- **Essential 层**：schema 始终携带在每轮 LLM 调用的 `tools` 参数中。当前代码中唯一的 Essential 工具是 `ask_user`（tools/agent/ask_tool.py:108-115，`visibility="essential"`）。提问是 Agent 与用户交互的核心能力，必须随时可用，不能等发现。
-- **Discoverable 层**：schema 不直接携带，Agent 通过合成工具按需发现。信息检索、文件读写、消息发送、任务管理、跨插件 API、MCP 工具全部在这一层。
+- **Essential 层**：schema 始终携带在每轮 LLM 调用的 `tools` 参数中。当前代码中唯一的 Essential 工具是 `ask_user`（tools/agent/ask_tool.py:108-115，`visibility="essential"`）。提问是 Agent 与用户交互的核心能力，必须随时可用。
+- **Discoverable 层**：Agent 循环每轮把当前角色可见的全部 discoverable 工具**直接**放进 `tools` 参数（`_build_tool_schemas`，executor/agent_loop.py:127-150），不再要求 LLM 先经发现工具枚举再按名加载——LLM 看到的工具名即注册表真实名称。信息检索、文件读写、消息发送、任务管理、跨插件 API、MCP 工具全部在这一层，按 `min_role` 过滤后暴露。
 
-### 合成发现工具
+### 合成发现工具（兜底，不再进入 schema）
 
-Discoverable 层的入口是两个始终呈现的合成工具（tools/synthetic/discovery.py）：
+`list_tools` / `get_tool_schema`（tools/synthetic/discovery.py）曾是 Discoverable 层的必经入口，现已被直接全量暴露取代，**不再出现在 Agent 循环每轮的 schema 中**（避免噪音与误导）：
 
 - `list_tools`：列出当前角色可见的所有 discoverable 工具名与描述（`handle_list_tools`，56-71）。
-- `get_tool_schema`：按名称返回完整 JSON Schema，并把该工具加入已加载集合（`handle_get_tool_schema`，74-110）。非 discoverable 工具（88-97）或角色不足（99-104）都会被拒绝。
+- `get_tool_schema`：按名称返回完整 JSON Schema（`handle_get_tool_schema`，74-110）。非 discoverable 工具（88-97）或角色不足（99-104）都会被拒绝。
 
-合成工具不注册进 ToolRegistry，而是由 AgentLoop 在工具分发时特判调用（executor/agent_loop.py:502-513）：`list_tools` / `get_tool_schema` / `ask_user` 走内置 handler，其余走 `registry.execute(name, role, **args)`。每轮构建 schema 时（`_build_tool_schemas`，agent_loop.py:127-150），Essential 工具、两个合成工具、已加载的 discoverable 工具三部分拼装成 `tools` 参数。
+两者仍由 AgentLoop 在工具分发时特判调用（executor/agent_loop.py:502-513）作为**兜底兼容**：历史会话恢复或 LLM 残余调用时返回真实工具清单，不产生误导性空转。
 
 ### 三通道分工
 
@@ -40,7 +40,7 @@ Discoverable 层的入口是两个始终呈现的合成工具（tools/synthetic/
 **Agent 循环通道（tools/agent/）**。Agent 在离线循环中自主调用的全部工具，注册进 ToolRegistry，经 `TaskManager.setup()`（core/task_manager.py 的 `setup`）按顺序注册：任务管理 → 信息 → 文件 → ask_user → send_message → 跨插件 API → 子 Agent → 命令执行。
 
 - 任务管理（tools/agent/task_mgmt.py:25-46）：`list_my_tasks` / `create_subtask` / `inject_task` 三个 discoverable 工具，全部从 `current_task` ContextVar 读取当前任务上下文取 owner。`inject_task` 要求 owner 匹配或 ADMIN（151）。
-- 信息获取（tools/agent/info_tools.py:33）：6 个 discoverable 工具（search_memory / fetch_history / query_person / search_users / get_frequency / list_plugin_tools），GUEST 可访问。
+- 信息获取（tools/agent/info_tools.py:33）：5 个 discoverable 工具（search_memory / fetch_history / query_person / search_users / get_frequency），GUEST 可访问。原 `list_plugin_tools` 已移除：它经 `ctx.tool.get_definitions()` 列出 MaiBot 宿主侧全量工具（含插件 planner 层 `list_mcp_tools` / `call_mcp_tool` 等），这些名字在 Agent 循环注册表不可调用，曾导致 LLM 照单调用后反复 tool-not-found 空转。
 - 文件读写（tools/agent/file_tools.py:50）：`read` / `write`，user 级隔离到 `data_dir/files/` 沙箱，admin 可开 `admin_open` 绕过。
 - 提问（tools/agent/ask_tool.py:22）：`ask_user`，唯一 Essential 工具。
 - 消息发送（tools/send_message.py：`build_send_tool`）：`send_message`，目标三选一 —— `stream_id` 直发指定聊天流（如其他用户的流，跳过建流）或 `group_id`/`user_id` 建流，默认润色 + 长文本分割，`polish`/`split` 可选项按场景关闭。
@@ -49,14 +49,14 @@ Discoverable 层的入口是两个始终呈现的合成工具（tools/synthetic/
 
 **Planner 通道（tools/planner/）**。主 Planner 通过 11 个 `@Tool` 装饰器（plugin.py:138/166/219/242/264/292/314/336/371/426/434）看到的安全子集。handler 全部懒构建（`_get_planner_tool`，plugin.py:112-132）：`search_users` 走独立工厂，`send_message` 与 Agent 循环版共用 `tools/send_message.py` 的实现，7 个 `task_*` 经 `build_task_tools(self._task_manager)`（tools/planner/task_tools.py:30-311）从 TaskManager 门面取，`list_mcp_tools` / `call_mcp_tool` 两个 MCP 代理工具经 `tools/planner/mcp_tools.py` 的工厂函数构建。Planner 调用者角色恒为 ADMIN（`_planner_caller_role`，task_tools.py:25-27），owner 标识为 `planner:{stream_id}`（20-22）。
 
-**Synthetic 通道（tools/synthetic/）**。`list_tools` / `get_tool_schema` 两个发现工具，见上文。
+**Synthetic 通道（tools/synthetic/）**。`list_tools` / `get_tool_schema` 两个发现工具，现为兜底兼容（不再进入 Agent 循环 schema），见上文。
 
 ### 权限过滤
 
 工具在呈现和执行两个阶段都按角色过滤：
 
-- 呈现阶段：`ToolRegistry.names(role)` / `list_essential(role)` / `list_discoverable(role)`（tools/registry.py:129-173）用 `PermissionResolver.require(role, min_role)` 过滤可见工具。
-- 发现阶段：`get_tool_schema` 再次校验角色（discovery.py:99-104）。
+- 呈现阶段：`ToolRegistry.names(role)` / `list_essential(role)` / `list_discoverable(role)`（tools/registry.py:129-173）用 `PermissionResolver.require(role, min_role)` 过滤可见工具；Agent 循环直接暴露过滤结果。
+- 发现阶段（兜底）：`get_tool_schema` 仍会再次校验角色（discovery.py:99-104）。
 - 执行阶段：`registry.execute(name, role, **kwargs)`（tools/registry.py:177-205）执行前二次门控，权限不足返回 `permission denied`。
 - 文件工具还有第三道防线：`FileAccessPolicy` 沙箱（tools/agent/file_tools.py:50），role_provider 来自 `current_task` ContextVar，攻击者无法伪造角色。
 
@@ -107,4 +107,4 @@ Discoverable 层的入口是两个始终呈现的合成工具（tools/synthetic/
 - [AI 提问](./07-ask-user.md)：`ask_user`，Essential 层唯一工具。
 - [MCP 集成](./08-mcp.md)：MCP 工具动态注册到 ToolRegistry。
 - [命令执行](./16-shell.md)：`run_command` 跨平台命令执行工具的权限与运行期防护。
-- [提示词系统](./12-prompt.md)：System prompt 告知 LLM 可用工具及两级呈现规则。
+- [提示词系统](./12-prompt.md)：System prompt 告知 LLM 可用工具及直接呈现规则。

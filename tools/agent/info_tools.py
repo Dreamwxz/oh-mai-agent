@@ -231,42 +231,13 @@ def build_info_tools(ctx, search_max_results: int = 20) -> list[ToolDefinition]:
             logger.exception("get_frequency 调用异常：%s", str(exc)[:80])
             return {"success": False, "error": str(exc)}
 
-    # ── 6. list_plugin_tools：插件工具发现 ─────────────────────────────
-
-    async def _list_plugin_tools(
-        query: str = "",
-        **kwargs: Any,
-    ) -> dict:
-        try:
-            logger.debug("list_plugin_tools 调用：query=%s", str(query)[:80])
-            raw = await ctx.tool.get_definitions()
-            # 兼容 mock 形式 {"tools": [...]} 和 SDK 原生形式 [...]
-            if isinstance(raw, dict) and "tools" in raw:
-                tools = raw["tools"]
-            elif isinstance(raw, list):
-                tools = raw
-            else:
-                tools = []
-
-            if query:
-                qlow = query.lower()
-                matched = [t for t in tools if qlow in t.get("name", "").lower()]
-            else:
-                matched = tools
-
-            summaries: list[dict] = []
-            for t in matched:
-                name = t.get("name", "")
-                desc = ""
-                definition = t.get("definition")
-                if isinstance(definition, dict):
-                    desc = definition.get("description", "")
-                summaries.append({"name": name, "description": desc})
-
-            return {"success": True, "tools": summaries, "count": len(summaries)}
-        except Exception as exc:
-            logger.exception("list_plugin_tools 调用异常：%s", str(exc)[:80])
-            return {"success": False, "error": str(exc)}
+    # ── 6.（已移除）list_plugin_tools ───────────────────────────────
+    #
+    # 该工具曾经 ``ctx.tool.get_definitions()`` 列出 MaiBot 宿主侧全量工具
+    # （含插件 planner 层 @Tool：list_mcp_tools / call_mcp_tool / task_* 等），
+    # 而这些名字在 Agent 循环注册表里不可调用，导致 LLM 照单调用后反复
+    # tool-not-found 空转。Agent 循环已改为全量直接暴露自身可调工具
+    # （executor/agent_loop.py），动态发现入口不再需要，故移除。
 
     # ── 组装返回 ─────────────────────────────────────────────────────────
 
@@ -401,25 +372,6 @@ def build_info_tools(ctx, search_max_results: int = 20) -> list[ToolDefinition]:
                 "required": ["chat_id"],
             },
             handler=_get_frequency,
-        ),
-        ToolDefinition(
-            name="list_plugin_tools",
-            description=(
-                "列出所有已注册工具：获取插件所有已注册的工具定义列表，可按关键词过滤。"
-                "这是 Discoverable 工具层的核心发现入口——Agent 先调用此工具发现可用工具，"
-                "再按需调用具体工具。"
-            ),
-            parameters={
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "过滤关键词（按工具名子串匹配，可选）",
-                    },
-                },
-                "required": [],
-            },
-            handler=_list_plugin_tools,
         ),
     ]
 

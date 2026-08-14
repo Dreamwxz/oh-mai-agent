@@ -3,9 +3,10 @@
 实现多轮 LLM 工具调用循环（``ctx.llm.generate_with_tools``）、
 指令注入消费、waiting_input 挂起/恢复、以及结果持久化。
 
-两级工具呈现：
-  - Essential（基础）：始终呈现的工具 schema（控制数量，节省 token）。
-  - Discoverable（可按需发现）：通过 ``list_tools`` + ``get_tool_schema`` 按需发现。
+工具呈现：**直接全量**（与子 Agent 循环一致）——对当前角色可见的
+essential 与 discoverable 工具每轮全部直接暴露给 LLM，不做
+list_tools / get_tool_schema 的按需发现仪式，避免「发现结果与
+可调用集不一致」导致的 tool-not-found 空转。
 
 工具在呈现和执行两个环节均按调用者角色过滤。
 """
@@ -29,7 +30,6 @@ from ..tools.registry import (
     build_llm_tool_schemas,
 )
 from ..tools.synthetic.discovery import (
-    build_discovery_schemas,
     handle_list_tools,
     handle_get_tool_schema,
 )
@@ -132,10 +132,14 @@ class AgentLoop:
     def _build_tool_schemas(self, role: Role) -> list[dict[str, Any]]:
         """为单轮 LLM 调用构建完整的工具 schema 列表。
 
-        包含：
-          - 所有对 *role* 可见的 essential 工具
-          - 合成的 ``list_tools`` 和 ``get_tool_schema`` 工具
-          - 已通过 ``get_tool_schema`` 加载的 discoverable 工具
+        Agent 循环采用**直接全量呈现**（与子 Agent 循环一致，见
+        ``executor/subagent.py``）：对 *role* 可见的 essential 与 discoverable
+        工具每轮全部直接暴露，不依赖 list_tools / get_tool_schema 的发现仪式。
+        这样 LLM 看到的工具名即注册表真实名称（如 ``mcp_fetch_fetch``），
+        不会出现「发现结果与可调用集不一致」导致的 tool-not-found 空转。
+
+        ``list_tools`` / ``get_tool_schema`` 不再出现在 schema 中（避免噪音），
+        但 handler 仍保留：历史会话恢复或 LLM 残余调用可得到友好响应。
         """
         schemas: list[dict[str, Any]] = []
 
@@ -143,10 +147,11 @@ class AgentLoop:
         essential = self._registry.list_essential(role)
         schemas.extend(build_llm_tool_schemas(essential))
 
-        # 合成发现工具（始终呈现）
-        schemas.extend(build_discovery_schemas())
+        # 全部对角色可见的 discoverable 工具（直接暴露，不做按需发现）
+        discoverable = self._registry.list_discoverable(role)
+        schemas.extend(build_llm_tool_schemas(discoverable))
 
-        # 已加载的 discoverable 工具
+        # 已加载的 discoverable 工具（历史 get_tool_schema 会话兜底，避免重复）
         for name in sorted(self._loaded_discoverable):
             td = self._registry.get(name)
             if td is not None:
@@ -157,7 +162,11 @@ class AgentLoop:
     # ── 内部工具处理器 ─────────────────────────────────────────────────
 
     async def _handle_list_tools(self, role: Role) -> dict[str, Any]:
-        """返回对 *role* 可见的所有 discoverable 工具的名称和描述。"""
+        """返回对 *role* 可见的所有 discoverable 工具的名称和描述。
+
+        兜底兼容：工具已全量直接暴露，正常情况下 LLM 无需调用本工具；
+        历史会话恢复或 LLM 残余调用时返回真实工具清单，避免误导。
+        """
         return await handle_list_tools(self._registry, role)
 
     async def _handle_get_tool_schema(
@@ -165,8 +174,9 @@ class AgentLoop:
     ) -> dict[str, Any]:
         """返回 discoverable 工具的完整 LLM schema。
 
-        该工具会被加入 ``_loaded_discoverable``，在后续轮次的
-        tools 参数中包含。
+        兜底兼容：同 ``_handle_list_tools``，正常路径不再需要；
+        该工具仍会被加入 ``_loaded_discoverable``，在后续轮次的
+        tools 参数中包含（防御重复）。
         """
         return await handle_get_tool_schema(
             self._registry, self._loaded_discoverable, role, name
