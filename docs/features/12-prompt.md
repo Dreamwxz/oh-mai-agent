@@ -44,7 +44,7 @@
 - **指令注入消费**：每轮 LLM 调用前 `_consume_injections()` 经 `take_injections()` 弹出待注入指令，逐条经 `_build_injection_message()` 格式化为 system 消息插入，并落历史（`agent_loop.py:234-256`）。
 - **注入消息格式化**：`_build_injection_message()` 调用 `prompt_service.build("injection", instruction=...)`（`agent_loop.py:227-233`）。历史回放时 injection 条目同样重建为 system 消息，保证恢复后上下文一致（`agent_loop.py:390-394`）。
 
-其余 builder 的调用点：`title` 在任务创建时（`lifecycle.py` 的 `llm_title` 回调），`polish` 在 `PolishService.polish()`（`executor/instant.py`），`planner_board` 在 `PlannerBoard.build_summary()`（`planner_hooks.py:120`），`context_note` 在跨流回复补写动机注释（`executor/instant.py:596`）。
+其余 builder 的调用点：`title` 在任务创建时（`lifecycle.py` 的 `llm_title` 回调），`polish` 在 `PolishService.polish()`（`executor/instant.py`），`planner_board` 在 `PlannerBoard.build_summary()`（`planner_hooks.py:120`），`context_note` 在 `ReplySender.append_motivation_note()`（跨流回复补写动机注释，`executor/instant.py`）。
 
 **为什么 builder 不入插件主流程的 pydantic 配置**：提示词是内容不是参数，模板本身就是配置。把模板目录视为「提示词的配置节」，`index.json` 是其 schema——这比给每个提示词加配置项更简单，也让提示词与代码解耦得更彻底。
 
@@ -60,7 +60,7 @@
 |---|---|
 | `agent_system.md` | `title`, `intent` |
 | `title.md` | `intent` |
-| `polish.md` | `context`, `jargon`, `result`, `kind`, `requester` |
+| `polish.md` | `context`, `jargon`, `result`, `requester` |
 | `planner_board.md` | `session_id`, `active`, `scheduled`, `recent` |
 | `injection.md` | `instruction`, `note_id` |
 | `context_note.md` | `kind`, `content`, `note_id` |
@@ -68,7 +68,7 @@
 
 **新增一个提示词场景**的步骤：在 `prompt/templates/` 下创建 `.md` 模板（用 `{{var}}` 占位符）→ 在 `index.json` 注册 `path` 与 `variables` → 在 `prompt/builders/` 新建 builder 子类（声明 `name`、实现 `build(ctx)` 调 `self._pm.render()`）→ 在 `ALL_BUILDERS` 列表注册实例（`prompt/builders/__init__.py`）→ 调用方经 `prompt_service.build("xxx", ...)` 使用。模板变量声明必须与 `index.json` 一致，XML 转义在 builder 侧完成。
 
-**prompt_service 的消费方**：`AgentLoop`（agent_system / injection）、`TaskCrud` 的标题回调（title）、`PolishService`（polish）、`PlannerBoard`（planner_board）、`InstantExecutor` 的跨流回复（context_note）。它们都经 `lifecycle.py` 组装时注入的同一个 `prompt_service` 实例，保证全插件提示词走同一渲染入口。
+**prompt_service 的消费方**：`AgentLoop`（agent_system / injection）、`TaskCrud` 的标题回调（title）、`PolishService`（polish）、`PlannerBoard`（planner_board）、`ReplySender.append_motivation_note`（context_note，跨流回复的动机注释）。它们都经 `lifecycle.py` 组装时注入的同一个 `prompt_service` 实例，保证全插件提示词走同一渲染入口。
 
 **工具描述纪律**。工具描述（`ToolDefinition.description`）面向 LLM，与 JSON Schema（`parameters`）面向函数调用引擎分工不同。描述应告诉模型**何时用、为什么用、失败会怎样**（surface），禁止描述内部实现细节（machinery），如「调用 XX API」「查询 XX 表」。
 

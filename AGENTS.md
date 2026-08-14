@@ -28,8 +28,12 @@ TaskControl（`core/usecases/`）→ ExecutorFactory → InstantExecutor（进�
 （`executor/subagent.py` 的 SubAgentLoop，并行工具轮 + 答案回传主循环继续判断）。
 执行期上下文经 `executor/context.py` 的 `current_task` ContextVar 传递（唯一 set 方
 AgentExecutor.execute，finally reset 防并发泄漏），`make_role_provider` 按任务 owner/stream_id
-构造角色回调。回复链路经 PolishService 润色、splitter 分割（`executor/splitter.py`）后
-逐段发送（指数退避重试：1s → 2s）。
+构造角色回调。回复链路统一走 `executor/instant.py` 的 `ReplySender` 两条出口：
+`send_raw`（直发：分割 + 重试，无润色，命令/失败通知等确定性文本）与
+`send_polished`（完整：信息获取 → PolishService 润色 → 复用直发段，任务回复/提问/
+send_message）；发送出口纯发送（不写 context），跨流动机注释经独立能力
+`append_motivation_note` 显式写入（对用户不可见，写给 MaiBot/Planner 上下文）。
+重试次数读 `[send] max_retries`（默认 3，指数退避 1s → 2s），分割跟随 `[splitter]`。
 
 **权限与隔离**。guest / user / admin 三级角色，PermissionResolver（`permission.py`）按配置判定。
 每个 ToolDefinition 有 `min_role` 做角色过滤；文件工具二次经 FileAccessPolicy 沙箱校验，
