@@ -123,10 +123,10 @@ class TestCreatePlugin:
     def test_create_plugin_returns_plugin_instance(self) -> None:
         p = create_plugin()
         assert isinstance(p, MaibotAgentPlugin)
-        # get_components 收集 9 Tool + 7 Command + 2 HookHandler
+        # get_components 收集 11 Tool + 7 Command + 2 HookHandler
         components = p.get_components()
         types_ = [c["type"] for c in components]
-        assert types_.count("TOOL") == 9
+        assert types_.count("TOOL") == 11
         assert types_.count("COMMAND") == 7
         assert types_.count("HOOK_HANDLER") == 2
 
