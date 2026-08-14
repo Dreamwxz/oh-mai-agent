@@ -257,6 +257,52 @@ class AgentLoop:
                 "timestamp": datetime.now().isoformat(),
             })
 
+    async def _persist_round(
+        self,
+        task: TaskRecord,
+        round_num: int,
+        result: dict[str, Any],
+        messages: list[dict[str, Any]],
+        msgs_before: int,
+        tool_calls: list[dict[str, Any]],
+    ) -> None:
+        """持久化单轮 LLM 调用条目：追加历史 + 更新水位 + 守卫保存任务快照。
+
+        - 第 1 轮存完整消息列表（回放种子）；后续轮只存增量（``new_messages``）；
+        - ``_last_history_id`` 记录持久化水位（审计 / 未来增量续传锚点）；
+        - 守卫保存：仅当持久化记录未达终态时写快照，避免覆盖并发终态。
+
+        Args:
+            task: 当前任务。
+            round_num: 本轮号。
+            result: 本轮 LLM 结果 dict（取 ``response`` / ``tool_calls``）。
+            messages: 完整消息列表（用于首轮快照与增量差分）。
+            msgs_before: 本轮消息追加前的消息数（增量差分起点）。
+            tool_calls: 本轮工具调用列表（收尾轮为 ``[]``）。
+        """
+        _entry: dict[str, Any] = {
+            "round": round_num,
+            "llm_result": {
+                "response": result.get("response", ""),
+                "tool_calls": tool_calls,
+            },
+            "timestamp": datetime.now().isoformat(),
+        }
+        if round_num == 1:
+            _entry["messages"] = messages.copy()
+        else:
+            _entry["new_messages"] = messages[msgs_before:]
+        _history_id = await self._store.append_history(task.id, _entry)
+        task.set_last_history_id(_history_id)
+        persisted = await self._store.get(task.id)
+        if persisted is None or not persisted.is_terminal():
+            await self._store.save(
+                task,
+                expected_status=(
+                    persisted.status if persisted is not None else None
+                ),
+            )
+
     # ── 总线命令处理器 ────────────────────────────────────────────────
 
     async def _on_bus_command(self, cmd: Any) -> None:
@@ -442,31 +488,10 @@ class AgentLoop:
                         "role": "assistant",
                         "content": result.get("response", ""),
                     })
-                    # ── 持久化本轮条目 ────────────────
-                    # 第 1 轮存完整消息列表（回放种子）；后续轮
-                    # 只存增量；游标记录最后一条快照 id。
-                    _entry: dict[str, Any] = {
-                        "round": round_num,
-                        "llm_result": {
-                            "response": result.get("response", ""),
-                            "tool_calls": [],
-                        },
-                        "timestamp": datetime.now().isoformat(),
-                    }
-                    if round_num == 1:
-                        _entry["messages"] = messages.copy()
-                    else:
-                        _entry["new_messages"] = messages[_msgs_before:]
-                    _history_id = await self._store.append_history(task.id, _entry)
-                    task.set_last_history_id(_history_id)
-                    persisted = await self._store.get(task.id)
-                    if persisted is None or not persisted.is_terminal():
-                        await self._store.save(
-                            task,
-                            expected_status=(
-                                persisted.status if persisted is not None else None
-                            ),
-                        )
+                    # ── 持久化本轮条目（收尾轮无工具调用）──
+                    await self._persist_round(
+                        task, round_num, result, messages, _msgs_before, [],
+                    )
                     logger.info(
                         "任务 %s 已完成，共 %d 轮（无工具调用）",
                         task.id, round_num,
@@ -538,28 +563,9 @@ class AgentLoop:
                     })
 
                 # ── 持久化本轮条目 ────────────────
-                _entry: dict[str, Any] = {
-                    "round": round_num,
-                    "llm_result": {
-                        "response": result.get("response", ""),
-                        "tool_calls": tool_calls,
-                    },
-                    "timestamp": datetime.now().isoformat(),
-                }
-                if round_num == 1:
-                    _entry["messages"] = messages.copy()
-                else:
-                    _entry["new_messages"] = messages[_msgs_before:]
-                _history_id = await self._store.append_history(task.id, _entry)
-                task.set_last_history_id(_history_id)
-                persisted = await self._store.get(task.id)
-                if persisted is None or not persisted.is_terminal():
-                    await self._store.save(
-                        task,
-                        expected_status=(
-                            persisted.status if persisted is not None else None
-                        ),
-                    )
+                await self._persist_round(
+                    task, round_num, result, messages, _msgs_before, tool_calls,
+                )
 
             else:
                 # 超出最大轮数限制
