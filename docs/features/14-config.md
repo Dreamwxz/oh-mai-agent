@@ -158,6 +158,16 @@ MCP 工具进入 Agent 工具集的 Discoverable 层，按权限过滤。不支�
 
 子 Agent 由主 Agent 通过工具调用触发，结果回传主 Agent 上下文继续判断；配置经 config_getter 热更新，无需重注册。详见 [子 Agent](./15-subagent.md)。
 
+#### `[shell]` — 命令执行
+
+| 字段 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `enabled` | `bool` | `true` | 是否注册 run_command 命令执行工具；`false` 时 `TaskManager.setup()` 不注册 |
+| `timeout_seconds` | `int` | `60` | 命令默认超时（秒，`ge=1`）；超时后强制终止整个进程树 |
+| `max_output_chars` | `int` | `8000` | stdout/stderr 单侧最大返回字符数（`ge=100`），超长截断 |
+
+`run_command` 仅对 admin 可见（min_role + role_provider 双重门控），子 Agent 允许集排除该工具；配置经 config_getter 热更新，`timeout_seconds` / `max_output_chars` 修改后无需重注册立即生效。详见 [命令执行](./16-shell.md)。
+
 ### 已知限制
 
 - **`default_timeout_min` 已配置但未执行**（config.py:124-131）。`TaskConfig.default_timeout_min` 声明了 `ask_user` 无回复挂起等待时间的意图，但调度器未读取该值：`waiting_input` 状态的任务不因超时而自动取消或推进，而是永久挂起直到用户回复或手动取消。

@@ -28,6 +28,7 @@ from ..tools.agent.ask_tool import build_ask_tool
 from ..tools.agent.file_tools import build_file_tools
 from ..tools.agent.info_tools import build_info_tools
 from ..tools.agent.plugin_api_tools import refresh_plugin_api_tools
+from ..tools.agent.shell_tools import build_shell_tools
 from ..tools.send_message import build_send_tool
 from ..tools.agent.subagent_tool import build_subagent_tool, build_subagents_tool
 from ..tools.registry import ToolDefinition, ToolRegistry
@@ -241,6 +242,17 @@ class TaskManager:
                     config_getter=lambda: self._config.subagent,
                     role_provider=lambda: self._current_task_role(),
                 ),
+            ):
+                self._registry.register(tool)
+
+        # ── 8. 命令执行工具 ─────────────────────────────────────────
+        # config_getter 每次调用读取，timeout / 输出上限热更新立即生效；
+        # 工具仅 admin 可见（min_role + role_provider 双重门控）
+        if self._config.shell.enabled:
+            for tool in build_shell_tools(
+                self._ctx,
+                config_getter=lambda: self._config.shell,
+                role_provider=lambda: self._current_task_role(),
             ):
                 self._registry.register(tool)
 

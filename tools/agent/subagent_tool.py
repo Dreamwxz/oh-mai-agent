@@ -9,8 +9,8 @@
 
 工具集规则（默认允许集）：当前角色可见的全部工具，排除精确名
 ``ask_user`` / ``send_message`` / ``list_my_tasks`` / ``create_subtask`` /
-``inject_task`` / ``ask_subagent`` / ``ask_subagents`` / ``list_plugin_tools``
-与 ``call_`` 前缀（跨插件 API 工具）；MCP 工具（``mcp_`` 前缀）包含。
+``inject_task`` / ``ask_subagent`` / ``ask_subagents`` / ``list_plugin_tools`` /
+``run_command`` 与 ``call_`` 前缀（跨插件 API 工具）；MCP 工具（``mcp_`` 前缀）包含。
 
 ``tools`` 参数可选：缺省/为空 → 默认允许集；传入时必须为默认允许集的子集，
 任一非法名 → 整体拒绝（绝不静默过滤）。
@@ -38,7 +38,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # 子 Agent 不可见的工具精确名集合（防绕过：不能发消息、反问用户、管理任务、
-# 跨插件 API、再派生子 Agent 或经 list_plugin_tools 动态发现）。
+# 跨插件 API、再派生子 Agent、执行宿主机命令或经 list_plugin_tools 动态发现）。
 _SUBAGENT_EXCLUDED = frozenset({
     "ask_user",
     "send_message",
@@ -48,6 +48,7 @@ _SUBAGENT_EXCLUDED = frozenset({
     "ask_subagent",
     "ask_subagents",
     "list_plugin_tools",
+    "run_command",
 })
 
 
@@ -104,8 +105,10 @@ def _make_runner(
         cfg = config_getter()  # 每次调用读取，热更新立即生效
 
         async def _exec(name: str, role_: Role, args: dict) -> dict:
-            # registry.execute 是 **kwargs 签名，必须解包 dict 再透传。
-            return await registry.execute(name, role_, **args)
+            # registry.execute 是 **kwargs 签名，必须解包 dict 再透传；
+            # 剥离保留参数名（name/role），避免 LLM 夹带时关键字重复绑定抛 TypeError。
+            call_args = {k: v for k, v in args.items() if k not in ("name", "role")}
+            return await registry.execute(name, role_, **call_args)
 
         try:
             defs = _resolve_toolset(registry, role, requested)

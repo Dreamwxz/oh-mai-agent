@@ -431,6 +431,43 @@ class SubAgentConfig(PluginConfigBase):
     )
 
 
+class ShellConfig(PluginConfigBase):
+    """宿主机命令执行工具配置。"""
+
+    __ui_label__ = "Shell命令"
+    __ui_order__ = 10
+
+    enabled: bool = Field(
+        default=True,
+        description="是否启用 run_command 命令执行工具（仅 admin 可调用，Discoverable 层按需发现）",
+        json_schema_extra={
+            "label": "启用命令执行",
+            "hint": "是否启用 run_command 命令执行工具（仅 admin 可调用，Discoverable 层按需发现）",
+            "order": 0,
+        },
+    )
+    timeout_seconds: int = Field(
+        default=60,
+        ge=1,
+        description="命令默认超时（秒）；超时后强制终止整个进程树",
+        json_schema_extra={
+            "label": "默认超时（秒）",
+            "hint": "命令默认超时（秒）；超时后强制终止整个进程树",
+            "order": 1,
+        },
+    )
+    max_output_chars: int = Field(
+        default=8000,
+        ge=100,
+        description="stdout/stderr 单侧最大返回字符数，超长截断",
+        json_schema_extra={
+            "label": "输出长度上限",
+            "hint": "stdout/stderr 单侧最大返回字符数，超长截断",
+            "order": 2,
+        },
+    )
+
+
 class MaibotAgentConfig(PluginConfigBase):
     """oh-mai-agent 插件完整配置。"""
 
@@ -475,4 +512,8 @@ class MaibotAgentConfig(PluginConfigBase):
     subagent: SubAgentConfig = Field(
         default_factory=SubAgentConfig,
         description="子 Agent 配置",
+    )
+    shell: ShellConfig = Field(
+        default_factory=ShellConfig,
+        description="命令执行工具配置",
     )
