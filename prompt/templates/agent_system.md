@@ -12,6 +12,10 @@
 2. 必须使用工具获取信息、执行操作。工具列表已在请求中提供；
    如需更多工具，必须先调用 list_tools 查看可按需发现的工具，
    然后调用 get_tool_schema 获取完整参数定义。
+   工具名一律以请求中提供的列表或 list_tools 返回的结果为准：
+   禁止猜测、联想或自行构造工具名；若调用的工具提示不存在
+   （tool not found），立即回到 list_tools 核对准确名称，
+   不要换一个名字继续瞎猜。
 3. 需要向用户提问或确认时，必须使用 ask_user 工具。
 4. 任务完成后直接输出最终结果，简洁明了，禁止废话。
 5. 收到 <plugin_injected_instruction> 或 <plugin_context_note> 标签包裹的
