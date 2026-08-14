@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -27,12 +27,6 @@ class PromptTemplate:
     """单个命名模板的元数据。"""
     name: str
     variables: frozenset[str]
-
-
-@dataclass(frozen=True, slots=True)
-class PromptSnapshot:
-    """所有模板的时间点快照。"""
-    templates: dict[str, str] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -134,17 +128,6 @@ class PromptManager:
         tmpl_obj = self._template_cache[name]
         result = tmpl_obj.render(**data)
         return result
-
-    def snapshot(self) -> PromptSnapshot:
-        """返回所有模板内容的快照。
-
-        强制加载全部模板（而非仅已渲染过的），
-        按 (template_name → content) 打包，供调用方保存或传递。
-        """
-        all_templates: dict[str, str] = {}
-        for name in self._templates:
-            all_templates[name] = self._load_content(name)
-        return PromptSnapshot(templates=all_templates)
 
     # ------------------------------------------------------------------
     # 内部辅助方法

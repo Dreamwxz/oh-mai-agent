@@ -18,14 +18,14 @@ MaiBot 的 Host 主流程负责实时聊天，不适合承载需要长时间推�
 
 ### 数据模型：TaskRecord
 
-`TaskRecord`（`domain/task_record.py:161-375`）是任务的唯一领域模型，一个全字段 JSON 可序列化的 dataclass。它收纳任务的全部可持久化字段：标识（id / title / intent）、分级与状态（level / status）、归属（owner / stream_id / platform / reply_stream_id）、触发方式（trigger_type / delay_seconds / cron_expr / scheduled_at）、时间戳与优先级、运行时约束（max_runtime_min）、扩展（metadata）以及审计日志（_status_log）。
+`TaskRecord`（`domain/task_record.py:140-354`）是任务的唯一领域模型，一个全字段 JSON 可序列化的 dataclass。它收纳任务的全部可持久化字段：标识（id / title / intent）、分级与状态（level / status）、归属（owner / stream_id / platform / reply_stream_id）、触发方式（trigger_type / delay_seconds / cron_expr / scheduled_at）、时间戳与优先级、运行时约束（max_runtime_min）、扩展（metadata）以及审计日志（_status_log）。
 
 两个设计要点：
 
 1. **不含任何运行时对象**。队列、asyncio.Event、AgentLoop 引用等运行时状态绝不写入 TaskRecord，也不落库。运行时对象由执行器持有（如 AgentLoop 的 `_resume_events` 存实例属性），TaskRecord 只负责可持久化的那一面。旧代码中的 `Task` 别名已删除，全仓库统一使用 `TaskRecord`。
 2. **回复目标有回退**。`reply_target` 属性（`domain/task_record.py:308-310`）返回 `reply_stream_id`，未设置时回退到 `stream_id`。这支持跨流回复：agent 任务可以把回复发到与创建流不同的目标流。
 
-序列化由 `to_dict()`（`domain/task_record.py:315-340`）与 `from_dict()`（`domain/task_record.py:341-375`）双向完成，`_status_log` 审计日志随序列化一起落盘、一起回填。
+序列化由 `to_dict()`（`domain/task_record.py:294-319`）与 `from_dict()`（`domain/task_record.py:320-354`）双向完成，`_status_log` 审计日志随序列化一起落盘、一起回填。
 
 ### 8 态状态机
 

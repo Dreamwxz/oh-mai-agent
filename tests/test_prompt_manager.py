@@ -1,4 +1,4 @@
-"""prompt_manager.py 的测试——PromptManager + PromptTemplate + PromptSnapshot。"""
+"""prompt_manager.py 的测试——PromptManager + PromptTemplate。"""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import textwrap
 import jinja2
 import pytest
 
-from oh_mai_agent.prompt.manager import PromptManager, PromptSnapshot, PromptTemplate
+from oh_mai_agent.prompt.manager import PromptManager, PromptTemplate
 
 
 # ---------------------------------------------------------------------------
@@ -78,18 +78,6 @@ class TestValidation:
     def test_missing_all_variables_raises(self, mgr: PromptManager) -> None:
         with pytest.raises(ValueError, match="missing"):
             mgr.render("polish")
-
-
-class TestSnapshot:
-    """PromptSnapshot 接口（P4 预留）。"""
-
-    def test_snapshot_contains_all_templates(self, mgr: PromptManager) -> None:
-        snap = mgr.snapshot()
-        assert isinstance(snap, PromptSnapshot)
-        assert set(snap.templates.keys()) == {"agent_system", "title", "polish", "planner_board", "injection", "context_note", "subagent_system"}
-        for name, content in snap.templates.items():
-            assert isinstance(content, str)
-            assert len(content) > 0
 
 
 class TestPromptTemplate:

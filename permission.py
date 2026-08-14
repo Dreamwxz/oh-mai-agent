@@ -171,17 +171,3 @@ class PermissionResolver:
         # ── 5. 默认 ──────────────────────────────────────────────────
         logger.debug("未命中任何规则，默认角色=%s", Role.GUEST.value)
         return Role.GUEST
-
-
-# ── 模块级便捷函数 ──────────────────────────────────────────────
-
-
-def require_role(actual: Role, minimum: Role) -> bool:
-    """模块级辅助函数 — 等同于 PermissionResolver.require。
-
-    无需持有 resolver 实例即可调用::
-
-        if not require_role(role, Role.USER):
-            raise PermissionError("需要用户及以上权限")
-    """
-    return PermissionResolver.require(actual, minimum)

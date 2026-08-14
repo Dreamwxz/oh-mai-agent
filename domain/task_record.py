@@ -97,27 +97,6 @@ def _parse_datetime(value: Any) -> datetime | None:
         return None
 
 
-def format_relative_time(seconds: float) -> str:
-    """将秒数格式化为中文相对时间描述。
-
-    Args:
-        seconds: 已过去的秒数（非负）。
-
-    Returns:
-        中文相对时间字符串，如 ``"刚刚"``、``"3 分钟前"``、``"2 天前"``。
-    """
-    if seconds < 10:
-        return "刚刚"
-    elif seconds < 60:
-        return f"{int(seconds)} 秒前"
-    elif seconds < 3600:
-        return f"{int(seconds // 60)} 分钟前"
-    elif seconds < 86400:
-        return f"{int(seconds // 3600)} 小时前"
-    else:
-        return f"{int(seconds // 86400)} 天前"
-
-
 # ═══════════════════════════════════════════════════════════════════════
 # StatusChange — 状态变更日志中的单条记录
 # ═══════════════════════════════════════════════════════════════════════

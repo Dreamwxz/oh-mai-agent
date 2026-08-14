@@ -16,7 +16,7 @@ sqlite 持久化存储与插件重启后的活跃任务恢复。所有任务记�
 
 ### TaskRecord：唯一可落库形态
 
-`TaskRecord`（domain/task_record.py:160-375）是收纳全部任务字段的 dataclass，每个字段均可 JSON 序列化：标识、分级、归属、触发信息、时间戳、优先级、metadata 扩展字段，以及内嵌的状态审计日志。`to_dict()`（task_record.py:315-338）/ `from_dict()`（task_record.py:340-375）在持久化字典与运行时对象之间互转；`from_dict` 经 `_restore()`（task_record.py:260-271）直接覆盖状态，不触发校验、不产生新审计条目。
+`TaskRecord`（domain/task_record.py:140-354）是收纳全部任务字段的 dataclass，每个字段均可 JSON 序列化：标识、分级、归属、触发信息、时间戳、优先级、metadata 扩展字段，以及内嵌的状态审计日志。`to_dict()`（task_record.py:294-319）/ `from_dict()`（task_record.py:320-354）在持久化字典与运行时对象之间互转；`from_dict` 经 `_restore()`（task_record.py:239-250）直接覆盖状态，不触发校验、不产生新审计条目。
 
 运行时对象（asyncio.Event、注入队列、AgentLoop 引用）不落在 TaskRecord 上，而是存于各模块的实例属性。典型例子是 AgentLoop 的 `_resume_events`（task_id → Event 映射，executor/agent_loop.py:108）：Event 不可 JSON 序列化，若写进 metadata 会在落盘时报错，因此放在循环实例的属性里。早期版本曾把这类运行时状态集中在一个独立对象中管理，v0.1.0 迁移时已删除；现行约定是"对象属于哪个模块，就存在哪个模块的实例属性，一律不写进 metadata"。
 

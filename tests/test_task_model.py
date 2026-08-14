@@ -15,7 +15,6 @@ from oh_mai_agent.domain.task_record import (
     TriggerType,
     _ALLOWED_TRANSITIONS,
     _TERMINAL_STATUSES,
-    format_relative_time,
 )
 
 
@@ -54,35 +53,6 @@ class TestTriggerType:
         assert TriggerType.NOW.value == "now"
         assert TriggerType.DELAY.value == "delay"
         assert TriggerType.CRON.value == "cron"
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# format_relative_time —— 相对时间格式化
-# ═══════════════════════════════════════════════════════════════════════════════
-
-class TestFormatRelativeTime:
-    def test_just_now(self) -> None:
-        assert format_relative_time(0) == "刚刚"
-        assert format_relative_time(5) == "刚刚"
-        assert format_relative_time(9.9) == "刚刚"
-
-    def test_seconds(self) -> None:
-        assert format_relative_time(10) == "10 秒前"
-        assert format_relative_time(30) == "30 秒前"
-        assert format_relative_time(59) == "59 秒前"
-
-    def test_minutes(self) -> None:
-        assert format_relative_time(60) == "1 分钟前"
-        assert format_relative_time(180) == "3 分钟前"
-        assert format_relative_time(3599) == "59 分钟前"
-
-    def test_hours(self) -> None:
-        assert format_relative_time(3600) == "1 小时前"
-        assert format_relative_time(7200) == "2 小时前"
-
-    def test_days(self) -> None:
-        assert format_relative_time(86400) == "1 天前"
-        assert format_relative_time(172800) == "2 天前"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

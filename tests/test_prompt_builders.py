@@ -314,17 +314,6 @@ class TestPromptService:
         with pytest.raises(KeyError, match="Unknown prompt builder"):
             svc.build("nonexistent")
 
-    def test_snapshot_delegates_to_manager(self, svc: PromptService) -> None:
-        snap = svc.snapshot()
-        from oh_mai_agent.prompt.manager import PromptSnapshot
-        assert isinstance(snap, PromptSnapshot)
-
-    def test_snapshot_without_manager(self) -> None:
-        svc = PromptService(manager=None, builders=ALL_BUILDERS)
-        snap = svc.snapshot()
-        from oh_mai_agent.prompt.manager import PromptSnapshot
-        assert isinstance(snap, PromptSnapshot)
-
     def test_all_builders_registered(self, svc: PromptService) -> None:
         names = set(svc.builders.keys())
         assert names == {"agent_system", "title", "polish", "planner_board", "injection", "context_note", "subagent_system"}

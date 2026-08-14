@@ -35,7 +35,7 @@ MaiBot 的插件生态里，插件之间需要协作。oh-mai-agent 掌握着完
 
 ### 向内扫描：call_{api} 动态工具
 
-Agent 循环内要调用其他插件的 API，不能预先把所有工具写死，因为插件生态是动态的。设计选择是运行时扫描：`TaskManager.setup()` 的第 6 步（`core/task_manager.py:213-222`）调用 `refresh_plugin_api_tools(ctx_api)`（`tools/agent/plugin_api_tools.py:192-265`），扫描 `ctx.api.list()` 返回的可见 API 列表，为每个 API 生成一个 `ToolDefinition`：
+Agent 循环内要调用其他插件的 API，不能预先把所有工具写死，因为插件生态是动态的。设计选择是运行时扫描：`TaskManager.setup()` 的第 6 步（`core/task_manager.py:213-222`）调用 `refresh_plugin_api_tools(ctx_api)`（`tools/agent/plugin_api_tools.py:67-135`），扫描 `ctx.api.list()` 返回的可见 API 列表，为每个 API 生成一个 `ToolDefinition`：
 
 - 工具名 `call_{api_name}`（API 名中的 `.` 替换为 `_`）
 - 参数统一为松散的 `args` 对象，键值对应 API 参数
@@ -44,7 +44,7 @@ Agent 循环内要调用其他插件的 API，不能预先把所有工具写死�
 
 生成的工具注册进 ToolRegistry（`core/task_manager.py:218-219`）。工具 handler 是 `_build_handler` 闭包（`plugin_api_tools.py:65-89`），内部执行 `ctx.api.call(api_name, **args)` 透传目标 API，dict 结果直接返回，其他类型包装为 `{"success": True, "result": ...}`，异常转为 `{"success": False, "error": ...}` 不向上抛出，让 Agent 循环把失败当作普通工具输出处理。
 
-扫描逻辑做了多层容错：`ctx.api.list()` 返回 list 或 `{"apis": [...]}` 都能归一化（`_normalize_api_list`，`plugin_api_tools.py:25-36`），缺 `api_name` 的条目跳过，扫描异常回退为空列表不阻断工具注册。另有同步版 `build_plugin_api_tools()`（`plugin_api_tools.py:159-189`）供非 async 环境使用，内部经 `_run_coroutine_sync()` 执行扫描，在已有事件循环中安全失败（避免跨线程破坏 SDK 的主循环 IPC）。生产环境实际使用的是异步版 `refresh_plugin_api_tools()`，由 `TaskManager.setup()` 在 async 上下文中调用。
+扫描逻辑做了多层容错：`ctx.api.list()` 返回 list 或 `{"apis": [...]}` 都能归一化（`_normalize_api_list`，`plugin_api_tools.py`），缺 `api_name` 的条目跳过，扫描异常回退为空列表不阻断工具注册。生产环境使用异步版 `refresh_plugin_api_tools()`，由 `TaskManager.setup()` 在 async 上下文中调用。
 
 ## 使用与配置
 
@@ -91,8 +91,7 @@ ctx.api.call("create", intent="整理聊天记录", owner="qq:1",
 跨插件 API 体系的权限门控是未完成部分，以下限制经代码验证，详见 [04-permission.md](./04-permission.md)：
 
 - **`max_level` 声明但未强制执行**：`build_api_handlers()` 接收 `config` 参数但从不读取 `config.api_expose.max_level`，6 个端点无论配置何值都以 `public=True` 注册。
-- **`check_api_call_permission` 是死代码**：`check_api_call_permission(role, max_level)`（`api_expose.py:29-65`）实现了完整的角色 vs 等级比较逻辑，但全仓库无任何调用点。
-- **handler 硬编码 ADMIN 绕过权限检查**：所有 handler 以 `Role.ADMIN` 调用 TaskManager，owner 权限检查被旁路。这是有意设计（跨插件调用视为受信任内部通信），但门控责任完全落在未接入的外部门控函数上。
+- **handler 硬编码 ADMIN 绕过权限检查**：所有 handler 以 `Role.ADMIN` 调用 TaskManager，owner 权限检查被旁路。这是有意设计（跨插件调用视为受信任内部通信），但门控责任完全落在未接入的外部门控上。
 
 整体影响：用户经聊天命令、Agent 经工具调用这两条路径都有完整的角色解析与校验，唯独其他插件经 `ctx.api.call()` 的路径无角色门控，端点 `public=True` 无门槛暴露，handler 以 ADMIN 执行。这是跨插件 API 体系当前最突出的安全缺口。
 

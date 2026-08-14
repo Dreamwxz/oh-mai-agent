@@ -128,9 +128,7 @@ class TestTaskCommandBusHelpers:
             received.append(cmd)
 
         bus.subscribe("t", handler)
-        assert bus.has_subscribers("t")
         bus.unsubscribe("t")
-        assert not bus.has_subscribers("t")
 
         await bus.send(TaskCommand(task_id="t", kind=CommandKind.CANCEL))
         assert len(received) == 0

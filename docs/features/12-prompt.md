@@ -14,7 +14,7 @@
 
 提示词系统分两层：**`PromptManager` 管模板，`PromptService` 管分发**。二者在插件组装时创建（`lifecycle.py:89-93`），`PromptManager` 指向 `prompt/templates/` 目录，`PromptService` 接收 `ALL_BUILDERS` 注册表。
 
-**PromptManager（`prompt/manager.py`）** 是模板的注册与渲染中心。它由 `index.json` 驱动——`index.json` 声明每个模板的 `path` 和 `variables`，`PromptManager` 据此构建模板元数据（`manager.py:50-82`）。渲染用 Jinja2，`StrictUndefined` 保证模板里引用了未声明变量时抛错而非静默变空串，`autoescape=False` 防止提示词内容被 HTML 转义（`manager.py:131-136`）。`render()` 在渲染前校验变量：传入变量必须覆盖模板声明的全部变量（缺则 `ValueError`），也不允许传未声明的额外变量（多则 `ValueError`），模板名不存在则 `KeyError`（`manager.py:115-126`）。模板内容懒加载并缓存，`snapshot()` 可强制加载全部模板内容打包快照（`manager.py:138-147`）。
+**PromptManager（`prompt/manager.py`）** 是模板的注册与渲染中心。它由 `index.json` 驱动——`index.json` 声明每个模板的 `path` 和 `variables`，`PromptManager` 据此构建模板元数据（`manager.py:50-82`）。渲染用 Jinja2，`StrictUndefined` 保证模板里引用了未声明变量时抛错而非静默变空串，`autoescape=False` 防止提示词内容被 HTML 转义（`manager.py:131-136`）。`render()` 在渲染前校验变量：传入变量必须覆盖模板声明的全部变量（缺则 `ValueError`），也不允许传未声明的额外变量（多则 `ValueError`），模板名不存在则 `KeyError`（`manager.py:115-126`）。模板内容懒加载并缓存。
 
 **PromptService（`prompt/service.py`）** 是统一构建入口。`build(name, task=..., **kwargs)` 按 name 查注册表，构造 `PromptContext` 后调用对应 builder（`service.py:46-76`）。构造时若 builder 未注入 `_pm`，会自动回填 manager，让所有 builder 共享同一渲染入口（`service.py:37-38`）。调用方不直接接触 builder 实例，只认 name 字符串——这层间接让「换实现」和「加场景」都不动调用点。
 

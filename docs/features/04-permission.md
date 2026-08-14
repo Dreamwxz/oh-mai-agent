@@ -50,12 +50,11 @@ oh-mai-agent 用 guest / user / admin 三级角色划分任务操作与工具访
 6 个跨插件端点（create / list / get / cancel / inject / history）由 `build_api_handlers`（api_expose.py:87-416）构建，在插件加载第 10 步注册到 SDK 动态 API（lifecycle.py:140-151）。设计意图是调用方先做角色门控再调用，但**当前门控未执行**：
 
 - 所有 handler 内部统一以 `_caller_role = Role.ADMIN`（api_expose.py:124）调用 TaskManager，注释认为"跨插件 API 调用可信"，TaskCrud 的 owner / guest 检查因此被旁路；
-- 6 个端点的 `public` 字段全部硬编码 True（api_expose.py:378/385/392/399/406/413）；
-- `check_api_call_permission`（api_expose.py:29-65）实现了角色与等级的比较逻辑，但全仓库无任何调用点。
+- 6 个端点的 `public` 字段全部硬编码 True（api_expose.py:378/385/392/399/406/413）。
 
-实际效果：任何能访问这些端点的插件都会被当作 ADMIN 对待，权限责任完全压在外部门控上，而外部门控函数尚未接入调用链。详见"已知限制"。
+实际效果：任何能访问这些端点的插件都会被当作 ADMIN 对待，权限责任完全压在外部门控上，而外部门控尚未接入调用链。详见"已知限制"。
 
-Agent 侧还有一组对应的调用工具：`build_plugin_api_tools` 动态扫描 `ctx.api.list()`，把每个可见 API 包装成 `call_{api}` 工具（tools/agent/plugin_api_tools.py:148），min_role 为 USER。这组工具受工具层 min_role 过滤约束，但底层端点本身仍是 public 的。
+Agent 侧还有一组对应的调用工具：`refresh_plugin_api_tools` 动态扫描 `ctx.api.list()`，把每个可见 API 包装成 `call_{api}` 工具（tools/agent/plugin_api_tools.py），min_role 为 USER。这组工具受工具层 min_role 过滤约束，但底层端点本身仍是 public 的。
 
 ## 使用与配置
 
@@ -89,9 +88,8 @@ Agent 侧还有一组对应的调用工具：`build_plugin_api_tools` 动态扫�
 ### 已知限制
 
 1. **api_expose 权限层未执行**：`max_level` 声明但未强制执行，6 个端点全部 public=true。
-2. **`check_api_call_permission` 是死代码**：定义于 api_expose.py:29-65，全仓库无调用点。
-3. **resolver 参数未使用**：`build_api_handlers` 接收 resolver（api_expose.py:89）但内部从不调用，仅保留签名。
-4. **后果边界**：跨插件 API 无角色门控，任务权限只依赖用户交互层与 Agent 工具层的检查；这两层本身是完整的。
+2. **resolver 参数未使用**：`build_api_handlers` 接收 resolver（api_expose.py:89）但内部从不调用，仅保留签名。
+3. **后果边界**：跨插件 API 无角色门控，任务权限只依赖用户交互层与 Agent 工具层的检查；这两层本身是完整的。
 
 ### 相关文档
 

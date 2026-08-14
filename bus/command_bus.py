@@ -121,10 +121,6 @@ class TaskCommandBus:
         self._subscribers.pop(task_id, None)
         logger.info("取消订阅：task_id=%s", task_id)
 
-    def has_subscribers(self, task_id: str) -> bool:
-        """检查 *task_id* 是否有已注册的处理器。"""
-        return task_id in self._subscribers and len(self._subscribers[task_id]) > 0
-
     # ── listen_events ──────────────────────────────────────────────────
 
     async def listen_events(

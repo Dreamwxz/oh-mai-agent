@@ -15,7 +15,7 @@ from __future__ import annotations
 import pytest
 
 from oh_mai_agent.config import PermissionConfig
-from oh_mai_agent.permission import PermissionResolver, Role, require_role
+from oh_mai_agent.permission import PermissionResolver, Role
 
 
 def make_resolver(
@@ -63,10 +63,6 @@ class TestRequire:
         assert PermissionResolver.require(Role.GUEST, Role.GUEST) is True
         assert PermissionResolver.require(Role.GUEST, Role.USER) is False
         assert PermissionResolver.require(Role.GUEST, Role.ADMIN) is False
-
-    def test_module_level_helper(self) -> None:
-        assert require_role(Role.ADMIN, Role.USER) is True
-        assert require_role(Role.GUEST, Role.USER) is False
 
 
 class TestDescribe:

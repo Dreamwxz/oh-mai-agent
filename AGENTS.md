@@ -54,7 +54,7 @@ agent_system / title / polish / planner_board / injection / context_note / subag
 |---|---|
 | [README.md](README.md) | 用户入口：安装 / 配置速查 / 命令用法 / 功能索引 |
 | [docs/](docs/) | LIFECYCLE 生命周期总览 + features/（15 份功能文档）+ history/（4 份归档） |
-| [tests/](tests/) | 测试：56 文件 1021 个测试函数，pytest 验证 0 失败（3 个 mcp_stdio 环境相关失败除外）+ 文档引用检查（test_doc_links.py） |
+| [tests/](tests/) | 测试：58 文件 999 个测试函数，pytest 验证 0 失败 + 文档引用检查（test_doc_links.py） |
 
 **目录结构**（散文式，不用多级缩进树）：
 
@@ -69,7 +69,7 @@ agent_system / title / polish / planner_board / injection / context_note / subag
 - `tools/mcp/`：MCP 工具提供方，MCPConnection（stdio/http/sse）+ MCPManager + presets（内置 fetch/exa 预设）
 - `prompt/`：提示词系统，manager / service / base + builders/（7）+ templates/（7 中文模板）
 - `tools/`：工具系统三通道（agent 循环工具（含子 Agent 工具 `subagent_tool.py`）/ planner @Tool 工厂 / synthetic 发现工具）+ 发送工具共用实现 `tools/send_message.py` + MCP 工具提供方（tools/mcp/）
-- `tests/`：测试（56 文件，1021 测试函数，0 失败，mcp_stdio 3 个用例受环境限制）+ 文档引用检查（test_doc_links.py）
+- `tests/`：测试（58 文件，999 测试函数，0 失败）+ 文档引用检查（test_doc_links.py）
 - `docs/` + `data/`：功能文档（15 + LIFECYCLE + 4 归档）与运行时数据（gitignored）
 
 > 依赖方向：root（plugin.py/lifecycle.py 组装根）→ core（编排）→ executor（执行）→ {tools, prompt, bus} → domain
@@ -123,7 +123,7 @@ agent_system / title / polish / planner_board / injection / context_note / subag
 uv run --with maibot-plugin-sdk pytest tests/ -q
 ```
 
-共 1021 个测试函数，pytest 验证 0 失败（mcp_stdio 3 个用例需可启动 MCP stdio 子进程，本环境不可用）。conftest 将项目根挂载为 `oh_mai_agent` 包。
+共 999 个测试函数，pytest 验证 0 失败。conftest 将项目根挂载为 `oh_mai_agent` 包。
 约定：mock LLM 和 transport，**不 mock 持久化**（使用 real_store 即真 sqlite）。
 
 **Lint / 类型检查**。项目未配置形式化 lint 或类型检查工具（`pyproject.toml` 中无

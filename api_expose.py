@@ -8,9 +8,7 @@
 
 当前实现（与设计意图有差距）：
   - build_api_handlers() 不读取 config.api_expose.max_level，
-    全部 6 个端点均以 public=True 注册，无等级过滤；
-  - check_api_call_permission() 已实现角色/等级比较逻辑，
-    但全仓库无任何调用点，属未接入的死代码。
+    全部 6 个端点均以 public=True 注册，无等级过滤。
 """
 
 from __future__ import annotations
@@ -24,36 +22,6 @@ from .core.task_manager import TaskManager
 from .domain.task_record import TaskRecord, TaskStatus
 
 logger = logging.getLogger(__name__)
-
-
-def check_api_call_permission(role: Role, max_level: str) -> bool:
-    """检查 *role* 是否满足 *max_level* 的 API 暴露要求。
-
-    供调用方插件或 SDK 注册层用于跨插件 API 访问门控。
-
-    Args:
-        role: 调用方的解析后角色（GUEST/USER/ADMIN）。
-        max_level: 配置中的最大暴露等级
-            （``"guest"`` / ``"user"`` / ``"admin"``）。
-
-    Returns:
-        若 ``role >= max_level`` 则返回 ``True``。
-
-    Example:
-        >>> check_api_call_permission(Role.USER, "user")
-        True
-        >>> check_api_call_permission(Role.GUEST, "user")
-        False
-    """
-    _order: dict[str, int] = {"guest": 0, "user": 1, "admin": 2}
-    role_val = _order.get(role.value, -1)
-    max_val = _order.get(max_level, 999)
-    allowed = role_val >= max_val
-    if allowed:
-        logger.debug("API 调用允许：角色 %s 满足最大暴露等级 %s", role.value, max_level)
-    else:
-        logger.info("API 调用被拒绝：角色 %s 不满足最大暴露等级 %s", role.value, max_level)
-    return allowed
 
 
 def _to_int(val: Any, default: int = 0) -> int:
@@ -97,8 +65,7 @@ def build_api_handlers(
     所有异常路径落在 ``error`` 字段。
 
     跨插件 API 调用内部按 ADMIN 级别处理。
-    注意：外部权限门控函数 :func:`check_api_call_permission` 已定义，
-    但当前未在注册或调用链路中实际执行 — 全部端点硬编码 ``public=True``。
+    注意：当前未做等级门控 — 全部端点硬编码 ``public=True``。
 
     Args:
         task_manager: TaskManager 实例，用于任务操作。

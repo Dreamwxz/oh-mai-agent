@@ -30,7 +30,7 @@ Agent 任务执行需要跨组件协作：调度器要往运行中的 AgentLoop 
 - **命令发送 `send(cmd)`**（`TaskCommandBus.send`）：按 `cmd.task_id` 查路由表，同步调用该任务的全部订阅处理器。单处理器异常 log-and-continue，不中断后续订阅者。这个容错是刻意的：RESUME 分支含 store 写入，超时路径的 `bus.send(CANCEL)` 无守卫，若此处重新抛出，检查循环与事件监听会被永久终止，并发额度随之泄漏。
 - **事件发布 `publish(event)`**（`TaskCommandBus.publish`）：fire-and-forget，事件写入内部 `asyncio.Queue`，**不**按路由表分发。事件监听者在 `listen_events` 循环侧消费。
 
-订阅接口：`subscribe(task_id, handler)` 注册命令处理器，`unsubscribe(task_id)` 移除某任务的全部处理器，`has_subscribers(task_id)` 查询。事件侧由 `listen_events(handler)`（`TaskCommandBus.listen_events`）提供阻塞循环：持续从事件队列取 `TaskEvent` 分发给 handler；单事件处理异常同样 log-and-continue，保证监听循环不因单个坏事件退出（否则 COMPLETED/FAILED 事件不再释放并发额度，后续任务全部排队）。
+订阅接口：`subscribe(task_id, handler)` 注册命令处理器，`unsubscribe(task_id)` 在任务结束后移除其全部处理器。事件侧由 `listen_events(handler)`（`TaskCommandBus.listen_events`）提供阻塞循环：持续从事件队列取 `TaskEvent` 分发给 handler；单事件处理异常同样 log-and-continue，保证监听循环不因单个坏事件退出（否则 COMPLETED/FAILED 事件不再释放并发额度，后续任务全部排队）。
 
 ### 订阅生命周期
 

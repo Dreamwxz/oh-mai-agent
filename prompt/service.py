@@ -10,7 +10,7 @@ import logging
 from typing import Any
 
 from .base import PromptBuilder, PromptContext
-from .manager import PromptManager, PromptSnapshot
+from .manager import PromptManager
 
 logger = logging.getLogger(__name__)
 
@@ -74,12 +74,6 @@ class PromptService:
         except Exception:
             logger.exception("builder %s 构建提示词失败", name)
             raise
-
-    def snapshot(self) -> PromptSnapshot:
-        """透传 manager.snapshot() — 若 manager 为 None 则返回空快照。"""
-        if self._manager is not None:
-            return self._manager.snapshot()
-        return PromptSnapshot()
 
     @property
     def builders(self) -> dict[str, PromptBuilder]:
