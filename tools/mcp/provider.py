@@ -247,6 +247,10 @@ class MCPManager:
         """
         return list(self._tools)
 
+    def connection_count(self) -> int:
+        """当前已建立连接的服务器数量（供外层日志/统计使用，不暴露内部映射）。"""
+        return len(self._connections)
+
     async def call_tool(self, server: str, name: str, arguments: dict[str, Any]) -> dict:
         """将工具调用路由到指定服务器。
 

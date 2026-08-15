@@ -116,17 +116,18 @@ async def load_plugin(plugin: "MaibotAgentPlugin") -> None:
     # 6. 启动调度器（执行回调已绑定，派发的任务可安全执行）
     await plugin._scheduler.start()
 
-    # 7. 恢复活跃任务
-    await recover_active_tasks(plugin, logger)
-
-    # 8. 初始化 MCP（如启用）
+    # 7. 初始化 MCP（如启用）——须先于恢复任务派发：恢复出的 agent 任务
+    #    首轮即可看到 MCP 工具（agent_loop 每轮重建 schema，但先注册更稳）。
     plugin._mcp = MCPManager(plugin.config.mcp)
     await plugin._mcp.start()
     mcp_tools = plugin._mcp.build_tool_definitions()
     for td in mcp_tools:
         plugin._registry.register(td)
-    logger.info("MCP 初始化完成: %d 个服务器, %d 个工具", len(plugin._mcp._connections), len(mcp_tools))
+    logger.info("MCP 初始化完成: %d 个服务器, %d 个工具", plugin._mcp.connection_count(), len(mcp_tools))
     plugin._mcp_config = plugin.config.mcp
+
+    # 8. 恢复活跃任务（MCP 已就绪，恢复的任务可用全部工具）
+    await recover_active_tasks(plugin, logger)
 
     # 9. Planner 看板初始化
     plugin._planner_board = PlannerBoard(
@@ -319,6 +320,6 @@ async def reload_mcp_if_changed(plugin: "MaibotAgentPlugin") -> None:
     unregister_stale_mcp_tools(plugin._registry, {td.name for td in mcp_tools})
     logger.info(
         "MCP 配置热更新: %d server(s), %d tool(s)",
-        len(plugin._mcp._connections),
+        plugin._mcp.connection_count(),
         len(mcp_tools),
     )
