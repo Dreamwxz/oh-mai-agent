@@ -136,8 +136,8 @@ class TestQueryPerson:
         self, mock_ctx: MockCtx, tools: dict[str, Any],
     ) -> None:
         mock_ctx._person_data["Alice"] = "person-alice"
-        # 聚合检索返回非 success 结构 → handler 包装为 {person_id, profile}
-        mock_ctx._capability_responses[""] = "画像摘要文本"
+        # 聚合检索按 query=person_name 命中 mock 响应 → handler 包装为 {person_id, profile}
+        mock_ctx._capability_responses["Alice"] = "画像摘要文本"
         result = await tools["query_person"].handler(person_name="Alice")
         assert result["success"] is True
         assert result["person_id"] == "person-alice"
@@ -148,7 +148,7 @@ class TestQueryPerson:
         self, mock_ctx: MockCtx, tools: dict[str, Any],
     ) -> None:
         mock_ctx._person_data["Bob"] = {"person_id": "person-bob"}
-        mock_ctx._capability_responses[""] = "画像摘要文本"
+        mock_ctx._capability_responses["Bob"] = "画像摘要文本"
         result = await tools["query_person"].handler(person_name="Bob")
         assert result["success"] is True
         assert result["person_id"] == "person-bob"
@@ -158,6 +158,28 @@ class TestQueryPerson:
         self, mock_ctx: MockCtx, tools: dict[str, Any],
     ) -> None:
         mock_ctx._person_data["Ghost"] = None
+        result = await tools["query_person"].handler(person_name="Ghost")
+        assert result == {"success": False, "error": "无法解析人物: Ghost"}
+
+    @pytest.mark.asyncio
+    async def test_empty_string_person_id_returns_error(
+        self, mock_ctx: MockCtx, tools: dict[str, Any],
+    ) -> None:
+        """真实宿主对查无此名返回空串 ""，须视为未解析且不再调用 knowledge.search。"""
+        mock_ctx._person_data["Ghost"] = ""
+
+        async def _should_not_call(capability: str, **kw: Any) -> Any:
+            raise AssertionError(f"不应调用 capability: {capability}")
+
+        mock_ctx.call_capability = _should_not_call  # type: ignore[method-assign]
+        result = await tools["query_person"].handler(person_name="Ghost")
+        assert result == {"success": False, "error": "无法解析人物: Ghost"}
+
+    @pytest.mark.asyncio
+    async def test_empty_dict_person_id_returns_error(
+        self, mock_ctx: MockCtx, tools: dict[str, Any],
+    ) -> None:
+        mock_ctx._person_data["Ghost"] = {"person_id": ""}
         result = await tools["query_person"].handler(person_name="Ghost")
         assert result == {"success": False, "error": "无法解析人物: Ghost"}
 

@@ -107,12 +107,16 @@ def build_info_tools(ctx, search_max_results: int = 20) -> list[ToolDefinition]:
         try:
             logger.debug("query_person 调用：person_name=%s", str(person_name)[:80])
             pid_result = await ctx.person.get_id_by_name(person_name)
-            # SDK 返回 person_id 字符串；同时兼容 dict-mock 形式
+            # SDK 返回 person_id 字符串；同时兼容 dict-mock 形式。
+            # 注意：真实宿主对查无此名返回空串 ""（success=True），必须判空；
+            # 否则空 pid + 空 query 会被 knowledge.search 以「缺少必要参数 query」拒绝。
             if isinstance(pid_result, str):
                 pid = pid_result
             elif isinstance(pid_result, dict) and pid_result.get("person_id"):
                 pid = pid_result["person_id"]
             else:
+                pid = ""
+            if not pid:
                 logger.warning("query_person 无法解析人物：%s", str(person_name)[:80])
                 return {
                     "success": False,
@@ -121,7 +125,7 @@ def build_info_tools(ctx, search_max_results: int = 20) -> list[ToolDefinition]:
 
             result = await ctx.call_capability(
                 "knowledge.search",
-                query="",
+                query=person_name,
                 person_id=pid,
                 mode="aggregate",
                 limit=5,
@@ -162,7 +166,8 @@ def build_info_tools(ctx, search_max_results: int = 20) -> list[ToolDefinition]:
                 # ── 人物画像查找（精确姓名匹配）───────────────
                 try:
                     pid_result = await ctx.person.get_id_by_name(keyword)
-                    if isinstance(pid_result, str):
+                    # 真实宿主对查无此名返回空串 ""，须判空避免假命中
+                    if isinstance(pid_result, str) and pid_result:
                         persons.append({"person_id": pid_result, "matched_by": "exact_name"})
                     elif isinstance(pid_result, dict) and pid_result.get("person_id"):
                         persons.append(
@@ -314,6 +319,8 @@ def build_info_tools(ctx, search_max_results: int = 20) -> list[ToolDefinition]:
             name="query_person",
             description=(
                 "查询人物信息：根据人物名/昵称解析person_id，然后通过记忆聚合模式获取该人物的画像近似信息。"
+                "注意：宿主按注册名精确匹配，名字必须完整（如'低调的空格'中的'的'字不可省略）；"
+                "解析失败时请改用 search_users 按昵称或QQ号检索。"
             ),
             parameters={
                 "type": "object",

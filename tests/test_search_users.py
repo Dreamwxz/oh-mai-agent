@@ -317,6 +317,20 @@ class TestBuildInfoToolsSearchUsersMultiSource:
         assert len(result["persons"]) == 1
         assert result["persons"][0]["person_id"] == "person-dict-id"
 
+    def test_empty_string_person_id_not_appended(self) -> None:
+        """给定 person.get_id_by_name 返回空串（真实宿主查无此名的形态），不产生假命中。"""
+        ctx = MockCtx()
+        ctx._chat_streams = []
+        ctx._person_data["空格"] = ""
+        tools = build_info_tools(ctx, search_max_results=20)
+        tool = self._find_tool(tools, "search_users")
+
+        result = asyncio.run(tool.handler(keyword="空格"))
+        assert result["success"] is True
+        assert result["count"] == 0
+        assert result["persons"] == []
+        assert result["streams"] == []
+
     def test_keyword_not_found_anywhere_returns_empty(self) -> None:
         """给定关键词无任何匹配，三张列表均为空，count 为 0。"""
         ctx = MockCtx()
