@@ -1024,6 +1024,68 @@ class TestResolveTaskById:
         assert "不存在" in str(result)
 
     @pytest.mark.asyncio
+    async def test_exact_title_match(self, store: TaskStore, manager: TaskManager) -> None:
+        """Planner 以标题代替 task_id（看板只显示标题）时应按唯一标题解析。"""
+        await store.save(make_task(
+            "aaaaaaaa-1111-2222-3333-444444444444",
+            title="系统环境检查", owner="qq:1",
+        ))
+        ok, result = await manager.get_task(
+            "系统环境检查", caller_role=Role.ADMIN, owner="",
+        )
+        assert ok is True
+        assert isinstance(result, TaskRecord)
+        assert result.id == "aaaaaaaa-1111-2222-3333-444444444444"
+
+    @pytest.mark.asyncio
+    async def test_ambiguous_title(self, store: TaskStore, manager: TaskManager) -> None:
+        """同名任务多个 → 报错并列出候选 ID，不武断解析。"""
+        await store.save(make_task("aaaaaaaa-1111-2222-3333-444444444444", title="重复"))
+        await store.save(make_task("bbbbbbbb-1111-2222-3333-444444444444", title="重复"))
+        ok, result = await manager.get_task("重复", caller_role=Role.ADMIN, owner="")
+        assert ok is False
+        assert "多个" in str(result)
+        assert "aaaaaaaa" in str(result)
+        assert "bbbbbbbb" in str(result)
+
+    @pytest.mark.asyncio
+    async def test_title_match_permission_still_applies(
+        self, store: TaskStore, manager: TaskManager,
+    ) -> None:
+        """标题解析成功后，非 ADMIN 的 owner 校验仍然生效。"""
+        await store.save(make_task(
+            "aaaaaaaa-1111-2222-3333-444444444444",
+            title="别人的任务", owner="qq:2",
+        ))
+        ok, result = await manager.get_task(
+            "别人的任务", caller_role=Role.USER, owner="qq:1",
+        )
+        assert ok is False
+        assert "权限" in str(result)
+
+    @pytest.mark.asyncio
+    async def test_title_fallback_for_control_and_history(
+        self, store: TaskStore, manager: TaskManager,
+    ) -> None:
+        """标题解析同样作用于 cancel / history（共用 resolve_task）。"""
+        await store.save(make_task(
+            "aaaaaaaa-1111-2222-3333-444444444444",
+            title="待取消", owner="qq:1", status=TaskStatus.PENDING,
+        ))
+        await store.save(make_task(
+            "bbbbbbbb-1111-2222-3333-444444444444",
+            title="有历史", owner="qq:1",
+        ))
+        await store.append_history("bbbbbbbb-1111-2222-3333-444444444444", {"round": 1})
+
+        ok, msg = await manager.cancel_task("待取消", caller_role=Role.USER, owner="qq:1")
+        assert ok is True
+
+        ok, history = await manager.task_history("有历史", caller_role=Role.USER, owner="qq:1")
+        assert ok is True
+        assert len(history) == 1
+
+    @pytest.mark.asyncio
     async def test_get_task_with_prefix(self, store: TaskStore, manager: TaskManager) -> None:
         await store.save(make_task("aaaabbbb-1111-2222-3333-444444444444", title="B", owner="qq:1"))
         ok, result = await manager.get_task("aaaabbbb", caller_role=Role.ADMIN, owner="qq:1")

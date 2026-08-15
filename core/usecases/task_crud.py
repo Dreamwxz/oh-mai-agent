@@ -137,17 +137,30 @@ class TaskCrud:
         ]
 
     async def resolve_task(self, task_id: str) -> tuple[bool, TaskRecord | str]:
-        """Resolve an exact task ID or a unique ID prefix."""
+        """Resolve an exact task ID, a unique ID prefix, or a unique title.
+
+        解析优先级：完整 ID → ID 前缀 → 唯一标题（精确匹配）。
+        标题兜底解决 Planner 以看板标题代替 task_id 的常见误用：
+        看板只展示标题不展示 ID 时，LLM 会自然地把标题当作 ID 传入。
+        权限校验（owner 匹配）在各调用方解析成功后执行，不受影响。
+        """
         task = await self._store.get(task_id)
         if task is not None:
             return True, task
         candidates = await self._store.get_by_prefix(task_id)
-        if not candidates:
+        if candidates:
+            if len(candidates) > 1:
+                ids = ", ".join(candidate.id[:8] for candidate in candidates)
+                return False, f"ID 前缀匹配到多个任务: {ids}，请使用完整 ID"
+            return True, candidates[0]
+        # 标题兜底：精确标题唯一匹配才解析；多个同名任务时给出候选 ID
+        by_title = await self._store.get_by_title(task_id)
+        if not by_title:
             return False, "任务不存在"
-        if len(candidates) > 1:
-            ids = ", ".join(candidate.id[:8] for candidate in candidates)
-            return False, f"ID 前缀匹配到多个任务: {ids}，请使用完整 ID"
-        return True, candidates[0]
+        if len(by_title) > 1:
+            ids = ", ".join(candidate.id[:8] for candidate in by_title)
+            return False, f"标题匹配到多个任务: {ids}，请使用任务 ID"
+        return True, by_title[0]
 
     async def get_task(
         self, task_id: str, *, caller_role: Role, owner: str,

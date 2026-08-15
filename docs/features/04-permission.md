@@ -39,7 +39,7 @@ oh-mai-agent 用 guest / user / admin 三级角色划分任务操作与工具访
 
 权限检查分布在三个入口，各自面向不同的调用方，覆盖从"人发命令"到"Agent 自主调用工具"的完整链路。
 
-**用户交互层。** /task 命令与 planner 工具经 TaskManager 门面进入 TaskCrud（core/usecases/task_crud.py）。创建任务对 guest 直接拦截（task_crud.py:67）；查看 / 修改 / 取消 / 注入等操作要求 owner 匹配或 ADMIN，owner 精确比较在 `_resolve_task_by_id` 与各方法内完成（task_crud.py:126-137）。这一层是同步的、有明确调用者的，角色由命令上下文直接解析。planner 工具是例外：主 Planner 被视为受信任的宿主组件，`_planner_caller_role` 恒返回 ADMIN（tools/planner/task_tools.py:25-27），不参与聊天流角色解析。
+**用户交互层。** /task 命令与 planner 工具经 TaskManager 门面进入 TaskCrud（core/usecases/task_crud.py）。创建任务对 guest 直接拦截（task_crud.py:67）；查看 / 修改 / 取消 / 注入等操作要求 owner 匹配或 ADMIN，owner 精确比较在 `resolve_task` 解析成功后于各方法内完成（task_crud.py:139-166）。解析支持完整 ID、唯一前缀与唯一标题，但权限校验始终在解析之后执行，标题兜底不会绕过 owner 隔离。这一层是同步的、有明确调用者的，角色由命令上下文直接解析。planner 工具是例外：主 Planner 被视为受信任的宿主组件，`_planner_caller_role` 恒返回 ADMIN（tools/planner/task_tools.py:25-27），不参与聊天流角色解析。
 
 **Agent 执行层。** 离线任务由 LLM 自主执行，工具调用需要知道"当前任务属于谁、以什么角色执行"。答案来自角色回调：`make_role_provider`（executor/context.py:16-31）从 task.owner / task.platform / task.stream_id 构造 `() -> Role` 回调，AgentExecutor 经 `_make_role_provider` 注入 AgentLoop（executor/agent.py:110-119），每轮执行前解析一次，resolver 缺失时回退 GUEST。角色绑定在任务上而非调用者上，因为 Agent 循环里没有"当前用户"，只有"当前任务"。
 

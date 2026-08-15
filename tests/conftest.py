@@ -448,8 +448,23 @@ class FakeTaskManager:
         if "get_task" in self.fail:
             return False, "not found"
         if self._store is not None:
+            # 与 TaskCrud.resolve_task 对齐：完整 ID → 前缀 → 唯一标题
             t = await self._store.get(task_id)
-            return (True, t) if t else (False, "not found")
+            if t is not None:
+                return True, t
+            hits = await self._store.get_by_prefix(task_id)
+            if len(hits) == 1:
+                return True, hits[0]
+            if len(hits) > 1:
+                ids = ", ".join(h.id[:8] for h in hits)
+                return False, f"ID 前缀匹配到多个任务: {ids}，请使用完整 ID"
+            by_title = await self._store.get_by_title(task_id)
+            if len(by_title) == 1:
+                return True, by_title[0]
+            if len(by_title) > 1:
+                ids = ", ".join(h.id[:8] for h in by_title)
+                return False, f"标题匹配到多个任务: {ids}，请使用任务 ID"
+            return False, "not found"
         return True, make_task(task_id=task_id)
 
     async def modify_task(self, task_id: str, **kwargs: Any) -> tuple[bool, str]:

@@ -70,6 +70,18 @@ class TestToolTaskHandlers:
         assert result["task"]["id"] == "task-abc"
 
     @pytest.mark.asyncio
+    async def test_task_status_accepts_title(
+        self, store: TaskStore, plugin_with_tm: MaibotAgentPlugin,
+    ) -> None:
+        """Planner 传标题（而非 ID）时 task_status 仍能解析（回归：任务不存在）。"""
+        await store.save(make_task("task-abc", title="系统环境检查"))
+        result = await plugin_with_tm._tool_task_status(
+            task_id="系统环境检查", stream_id="qq:1",
+        )
+        assert result["success"] is True
+        assert result["task"]["id"] == "task-abc"
+
+    @pytest.mark.asyncio
     async def test_task_modify_delegates(
         self, plugin_with_tm: MaibotAgentPlugin,
     ) -> None:

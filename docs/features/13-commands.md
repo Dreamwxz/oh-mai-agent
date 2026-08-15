@@ -70,8 +70,8 @@ commands.py 不直接接触 usecase 层，一律经 `TaskManager` 门面（core/
 |---|---|---|---|
 | `/maitask create <意图>` | 创建任务 | user+ | 返回任务 ID（前 8 位）、标题、级别、状态 |
 | `/maitask list [-all] [状态]` | 列出任务 | guest+（`-all` 仅 admin） | 可按状态过滤，最多 20 条 |
-| `/maitask status <ID>` | 查看任务详情 | guest+ | 支持完整 ID 或前缀匹配 |
-| `/maitask cancel <ID>` | 取消任务 | owner / admin | 支持完整 ID 或前缀匹配 |
+| `/maitask status <ID>` | 查看任务详情 | guest+ | 支持完整 ID、前缀或唯一标题 |
+| `/maitask cancel <ID>` | 取消任务 | owner / admin | 支持完整 ID、前缀或唯一标题 |
 | `/maitask history <ID>` | 查看执行历史 | guest+ | 展示最近 10 条 |
 | `/maitask ask <ID> <指令>` | 注入指令 | owner / admin | 向运行中任务注入指令 |
 | `/maitask help`（兜底） | 显示帮助 | 无限制 | 任何未匹配的 `/maitask` 输入都显示帮助 |

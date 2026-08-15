@@ -47,14 +47,16 @@ Planner 的请求是流式的，同一轮对话会发起多次 LLM 请求，摘�
 <task_board session="qq:g:123456">
 当前后台任务看板：
 活跃任务：
-- [RUNNING] 爬取用户数据（运行中 65 秒）
-- [WAITING_INPUT] 确认输出格式（等待中 3 分钟）
+- [running] 爬取用户数据（运行中 65 秒）[id:8c3f2a1b]
+- [waiting_input] 确认输出格式（等待中 3 分钟）[id:9d4e3b2c]
 定时任务：
-- [SCHEDULED] 每日报表（15 分钟后触发）
+- [scheduled] 每日报表（15 分钟后触发）[id:7a1b9c0d]
 最近完成：
-- [COMPLETED] 分析日志（2 分钟前）
+- [completed] 分析日志（2 分钟前）[id:5f6e7d8c]
 </task_board>
 ```
+
+每行末尾的 `[id:xxxxxxxx]` 是任务 ID 前 8 位短标识。它解决了 Planner 的一个常见误用：若看板只显示标题，Planner 想查任务详情时会把标题当作 `task_id` 传入 `task_status`，导致「任务不存在」。带短 ID 后 Planner 可以直接复制 ID；即使仍传标题，`TaskCrud.resolve_task`（core/usecases/task_crud.py）也会按唯一标题兜底解析。
 
 ### 注入流程
 

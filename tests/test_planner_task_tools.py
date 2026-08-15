@@ -188,6 +188,18 @@ class TestTaskStatus:
         assert result["task"]["id"] == "task-abc"
 
     @pytest.mark.asyncio
+    async def test_title_as_task_id_resolves(
+        self, store: TaskStore, tools: dict[str, Any],
+    ) -> None:
+        """Planner 以看板标题代替 task_id（如「系统环境检查」）时按唯一标题解析。"""
+        await store.save(make_task(
+            "task-abc", title="系统环境检查", stream_id="qq:g:1",
+        ))
+        result = await tools["task_status"](task_id="系统环境检查", stream_id="qq:g:1")
+        assert result["success"] is True
+        assert result["task"]["id"] == "task-abc"
+
+    @pytest.mark.asyncio
     async def test_missing_task_returns_error(
         self, tools: dict[str, Any], manager: FakeTaskManager,
     ) -> None:

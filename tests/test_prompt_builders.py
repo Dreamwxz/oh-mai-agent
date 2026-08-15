@@ -189,6 +189,20 @@ class TestPlannerBoardBuilder:
         assert "running" in prompt
         assert "测试任务" in prompt
 
+    def test_board_lines_include_short_id(self, pm: PromptManager) -> None:
+        """看板每行应带 [id:xxxx] 短 ID，供 Planner 复制到 task_status 等工具。"""
+        from oh_mai_agent.domain.task_record import TaskStatus
+        task = make_task("abcdef12-3456-7890-abcd-ef1234567890", title="系统环境检查",
+                         status=TaskStatus.RUNNING)
+        builder = PlannerBoardBuilder(pm=pm)
+        prompt = builder.build(PromptContext(data={
+            "session_id": "s1",
+            "active": [task],
+            "scheduled": [],
+            "recent": [],
+        }))
+        assert "[id:abcdef12]" in prompt
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # InjectionMessageBuilder — 注入消息

@@ -402,3 +402,56 @@ class TestGetByPrefix:
         assert hits == []
         await store.close()
 
+
+@pytest.mark.asyncio
+class TestGetByTitle:
+    async def test_exact_title(self, tmp_path) -> None:
+        db_path = tmp_path / "title.db"
+        store = TaskStore(str(db_path))
+        await store.init()
+        await store.save(make_task("aaaaaaaa-1111-2222-3333-444444444444", title="系统环境检查"))
+        await store.save(make_task("bbbbbbbb-1111-2222-3333-444444444444", title="其他任务"))
+        hits = await store.get_by_title("系统环境检查")
+        assert len(hits) == 1
+        assert hits[0].id == "aaaaaaaa-1111-2222-3333-444444444444"
+        await store.close()
+
+    async def test_multiple_same_title(self, tmp_path) -> None:
+        db_path = tmp_path / "title.db"
+        store = TaskStore(str(db_path))
+        await store.init()
+        await store.save(make_task("aaaaaaaa-1111-2222-3333-444444444444", title="重复标题"))
+        await store.save(make_task("bbbbbbbb-1111-2222-3333-444444444444", title="重复标题"))
+        hits = await store.get_by_title("重复标题")
+        assert len(hits) == 2
+        await store.close()
+
+    async def test_no_match(self, tmp_path) -> None:
+        db_path = tmp_path / "title.db"
+        store = TaskStore(str(db_path))
+        await store.init()
+        await store.save(make_task("aaaaaaaa-1111-2222-3333-444444444444", title="A"))
+        hits = await store.get_by_title("不存在的标题")
+        assert hits == []
+        await store.close()
+
+    async def test_empty_title(self, tmp_path) -> None:
+        db_path = tmp_path / "title.db"
+        store = TaskStore(str(db_path))
+        await store.init()
+        await store.save(make_task("aaaaaaaa-1111-2222-3333-444444444444", title="A"))
+        hits = await store.get_by_title("")
+        assert hits == []
+        hits2 = await store.get_by_title(None)  # type: ignore[arg-type]
+        assert hits2 == []
+        await store.close()
+
+    async def test_whitespace_stripped(self, tmp_path) -> None:
+        db_path = tmp_path / "title.db"
+        store = TaskStore(str(db_path))
+        await store.init()
+        await store.save(make_task("aaaaaaaa-1111-2222-3333-444444444444", title="系统环境检查"))
+        hits = await store.get_by_title("  系统环境检查  ")
+        assert len(hits) == 1
+        await store.close()
+

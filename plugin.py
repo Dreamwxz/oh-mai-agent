@@ -259,13 +259,13 @@ class MaibotAgentPlugin(MaiBotPlugin):
 
     @Tool(
         "task_status",
-        description="查看单个任务当前详情（快照）。要看执行历史用 task_history。",
+        description="查看单个任务当前详情（快照）。task_id 支持完整 ID、唯一前缀或唯一标题。要看执行历史用 task_history。",
         visibility="visible",
         parameters=[
             ToolParameterInfo(
                 name="task_id",
                 param_type=ToolParamType.STRING,
-                description="任务 ID",
+                description="任务 ID（支持完整 ID、唯一前缀或唯一标题）",
                 required=True,
             ),
             ToolParameterInfo(
@@ -281,13 +281,13 @@ class MaibotAgentPlugin(MaiBotPlugin):
 
     @Tool(
         "task_modify",
-        description="修改任务或注入指令。注意：注入指令仅管理员可用。",
+        description="修改任务或注入指令。task_id 支持完整 ID、唯一前缀或唯一标题。注意：注入指令仅管理员可用。",
         visibility="deferred",
         parameters=[
             ToolParameterInfo(
                 name="task_id",
                 param_type=ToolParamType.STRING,
-                description="任务 ID",
+                description="任务 ID（支持完整 ID、唯一前缀或唯一标题）",
                 required=True,
             ),
             ToolParameterInfo(
@@ -309,13 +309,13 @@ class MaibotAgentPlugin(MaiBotPlugin):
 
     @Tool(
         "task_delete",
-        description="取消/删除任务。不可恢复，请谨慎操作。",
+        description="取消/删除任务。task_id 支持完整 ID、唯一前缀或唯一标题。不可恢复，请谨慎操作。",
         visibility="visible",
         parameters=[
             ToolParameterInfo(
                 name="task_id",
                 param_type=ToolParamType.STRING,
-                description="任务 ID",
+                description="任务 ID（支持完整 ID、唯一前缀或唯一标题）",
                 required=True,
             ),
             ToolParameterInfo(
@@ -331,13 +331,13 @@ class MaibotAgentPlugin(MaiBotPlugin):
 
     @Tool(
         "task_history",
-        description="查看任务执行历史时间线。看当前状态用 task_status。",
+        description="查看任务执行历史时间线。task_id 支持完整 ID、唯一前缀或唯一标题。看当前状态用 task_status。",
         visibility="deferred",
         parameters=[
             ToolParameterInfo(
                 name="task_id",
                 param_type=ToolParamType.STRING,
-                description="任务 ID",
+                description="任务 ID（支持完整 ID、唯一前缀或唯一标题）",
                 required=True,
             ),
             ToolParameterInfo(

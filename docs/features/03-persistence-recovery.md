@@ -39,7 +39,7 @@ sqlite 持久化存储与插件重启后的活跃任务恢复。所有任务记�
 
 守卫模式被多个写点使用：调度器超时落盘（core/scheduler.py:543-554，expected_status=RUNNING）、cron 任务重排（core/scheduler.py:371，expected_status=COMPLETED）、AgentLoop 每轮保存（agent_loop.py:458-465）。
 
-查询侧接口：`get` / `get_by_prefix`（task_store.py:215-242，按 ID 前缀匹配）、`list`（task_store.py:244-298，多条件组合筛选）、`list_active`（task_store.py:300-318，返回全部非终态任务，是恢复流程的入口）、`delete`、`count`。
+查询侧接口：`get` / `get_by_prefix`（task_store.py:215-242，按 ID 前缀匹配）、`get_by_title`（task_store.py:244-276，按标题精确匹配，供 resolve_task 的标题兜底）、`list`（task_store.py:278-332，多条件组合筛选）、`list_active`（task_store.py:334-352，返回全部非终态任务，是恢复流程的入口）、`delete`、`count`。
 
 ### 状态变更的落盘时机
 

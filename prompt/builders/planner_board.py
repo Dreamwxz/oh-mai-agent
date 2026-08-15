@@ -62,11 +62,13 @@ class PlannerBoardBuilder(PromptBuilder):
         sfmt = StatusFormatter(now=now)
 
         # active / scheduled：status 直接取枚举原值；info 由 status_info()
-        # 取关联时间戳，经 sfmt.format() 格式化为中文状态描述
+        # 取关联时间戳，经 sfmt.format() 格式化为中文状态描述；
+        # id8 为 ID 前 8 位，供 Planner 直接复制到 task_status 等工具
         active_data = [
             {
                 "status": t.status.value,
                 "title": t.title,
+                "id8": t.id[:8],
                 "info": sfmt.format(*t.status_info()),
             }
             for t in active
@@ -75,6 +77,7 @@ class PlannerBoardBuilder(PromptBuilder):
             {
                 "status": t.status.value,
                 "title": t.title,
+                "id8": t.id[:8],
                 "info": sfmt.format(*t.status_info()),
             }
             for t in scheduled
@@ -86,6 +89,7 @@ class PlannerBoardBuilder(PromptBuilder):
             {
                 "status": t.status.value,
                 "title": t.title,
+                "id8": t.id[:8],
                 "rel": sfmt.format_relative(max((now - t.updated_at).total_seconds(), 0)),
             }
             for t in recent

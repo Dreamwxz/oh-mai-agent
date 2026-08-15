@@ -240,6 +240,42 @@ class TaskStore:
             logger.exception("按前缀查询任务失败：prefix=%s", normalized)
             raise
 
+    async def get_by_title(self, title: str) -> list[TaskRecord]:
+        """按标题精确匹配查询，返回所有匹配任务（0 个或多个）。
+
+        title 只存在 data JSON 内（无独立列），故全表扫描后在 Python 侧过滤；
+        任务量级小（个人助手场景），可接受。
+
+        Args:
+            title: 任务标题（精确匹配，忽略首尾空白）。
+
+        Returns:
+            匹配的任务列表，按创建时间倒序。
+        """
+        normalized = str(title or "").strip()
+        if not normalized:
+            return []
+
+        def _query() -> list[TaskRecord]:
+            with closing(sqlite3.connect(self._db_path)) as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute(
+                    "SELECT data FROM tasks ORDER BY created_at DESC"
+                ).fetchall()
+            hits: list[TaskRecord] = []
+            for row in rows:
+                record = TaskRecord.from_dict(json.loads(row["data"]))
+                if record.title == normalized:
+                    hits.append(record)
+            return hits
+
+        logger.debug("按标题查询任务：title=%s", normalized)
+        try:
+            return await asyncio.to_thread(_query)
+        except sqlite3.Error:
+            logger.exception("按标题查询任务失败：title=%s", normalized)
+            raise
+
     async def list(
         self,
         *,
