@@ -149,6 +149,10 @@ class PolishService:
             reply_style = str(
                 await self.ctx.config.get("personality.reply_style", "") or ""
             )
+            # 主程序 [bot].nickname：缺省空串（builder 兜底"麦麦"）
+            bot_name = str(
+                await self.ctx.config.get("bot.nickname", "") or ""
+            )
             system_prompt = self._prompt_service.build(
                 "polish",
                 jargon=jargons,
@@ -157,6 +161,7 @@ class PolishService:
                 requester=relay_from or "",
                 personality=personality,
                 reply_style=reply_style,
+                bot_name=bot_name,
             )
 
             llm_result = await self.ctx.llm.generate(
@@ -424,6 +429,8 @@ class ReplySender:
                 kind="task-reply",
                 content=content,
                 id=note_id,
+                # 主程序 [bot].nickname：缺省空串（builder 兜底"麦麦"）
+                bot_name=str(await self._ctx.config.get("bot.nickname", "") or ""),
             )
             await self._ctx.maisaka.context.append(
                 stream_id=stream_id,

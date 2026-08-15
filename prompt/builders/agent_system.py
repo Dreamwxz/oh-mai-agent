@@ -37,13 +37,18 @@ class AgentSystemBuilder(PromptBuilder):
         )
         if self._pm is None:
             raise RuntimeError("AgentSystemBuilder: PromptManager 未注入")
-        # 模板仅声明 title/intent 两个变量（见 templates/index.json）；
-        # 缺省空串兜底，保证渲染时两个声明变量始终有值（缺失会抛 ValueError）。
+        # 模板声明 title/intent/bot_name 三个变量（见 templates/index.json）；
+        # 缺省空串/麦麦兜底，保证渲染时声明变量始终有值（缺失会抛 ValueError）。
         title = _get_task_attr(ctx, "title", "")
         intent = _get_task_attr(ctx, "intent", "")
-        # title/intent 为纯文本占位（非 XML 标签内容），模板 autoescape=False，
+        # bot_name 为机器人昵称（主程序 [bot].nickname，由调用方传入）；
+        # 缺省兜底"麦麦"（与 MaiBot nickname 默认值一致）。
+        bot_name = str(ctx.data.get("bot_name", "") or "麦麦")
+        # title/intent/bot_name 为纯文本占位（非 XML 标签内容），模板 autoescape=False，
         # 原样渲染即可，无需像 injection/context_note 那样做 XML 转义。
-        return self._pm.render("agent_system", title=title, intent=intent)
+        return self._pm.render(
+            "agent_system", title=title, intent=intent, bot_name=bot_name
+        )
 
 
 def _get_task_attr(ctx: PromptContext, attr: str, default: str) -> str:

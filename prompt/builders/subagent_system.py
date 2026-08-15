@@ -36,12 +36,17 @@ class SubAgentSystemBuilder(PromptBuilder):
         # intent 来自主 Agent LLM 输出、tool_list 为工具名+描述文本，
         # 两者均嵌于模板 XML 标签内（<intent>/<tools>），须在 builder 侧
         # 转义——模板 autoescape=False，不会二次转义。
-        # 缺省空串兜底：模板两个声明变量（见 templates/index.json）始终有值，
+        # 缺省空串兜底：模板声明变量（见 templates/index.json）始终有值，
         # 缺失时 PromptManager 的变量校验会抛 ValueError。
         intent = str(ctx.data.get("intent", ""))
         tool_list = str(ctx.data.get("tool_list", ""))
+        # bot_name 为机器人昵称（主程序 [bot].nickname，由调用方传入），
+        # 出现在纯文本说明节（非 XML 标签内），无需转义；
+        # 缺省兜底"麦麦"（与 MaiBot nickname 默认值一致）。
+        bot_name = str(ctx.data.get("bot_name", "") or "麦麦")
         return self._pm.render(
             "subagent_system",
             intent=escape(intent),
             tool_list=escape(tool_list),
+            bot_name=bot_name,
         )

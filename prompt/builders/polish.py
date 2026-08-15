@@ -50,6 +50,8 @@ class PolishBuilder(PromptBuilder):
         # 主程序人格与表达风格（MaiBot [personality] 配置）：缺省为空串
         personality: str = str(ctx.data.get("personality", ""))
         reply_style: str = str(ctx.data.get("reply_style", ""))
+        # 主程序机器人昵称（MaiBot [bot].nickname）：缺省兜底"麦麦"
+        bot_name: str = str(ctx.data.get("bot_name", "") or "麦麦")
 
         # 黑话表格式化为 "序号. 黑话：释义"；空表返回占位符 "（无）"
         jargon_text = _format_jargon(jargons)
@@ -65,6 +67,7 @@ class PolishBuilder(PromptBuilder):
             requester=requester,
             personality=personality,
             reply_style=reply_style,
+            bot_name=bot_name,
         )
 
 

@@ -110,6 +110,8 @@ class SubAgentLoop:
             tool_list="\n".join(
                 f"- {tool.name}: {tool.description}" for tool in self._tools
             ),
+            # 主程序 [bot].nickname：缺省空串（builder 兜底"麦麦"）
+            bot_name=str(await self._ctx.config.get("bot.nickname", "") or ""),
         )
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": system_prompt}

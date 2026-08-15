@@ -355,6 +355,32 @@ class TestPolishService:
         # 默认人格行仍保留
         assert "友善、有点俏皮但不油腻、有分寸感" in system_prompt
 
+    @pytest.mark.asyncio
+    async def test_polish_injects_bot_name_from_main_config(
+        self, mock_ctx: MockCtx, prompt_service: Any
+    ) -> None:
+        """主程序 [bot].nickname 注入润色 system prompt；未配置时兜底"麦麦"。"""
+        mock_ctx._config_values["bot.nickname"] = "小美"
+        mock_ctx.llm.set_generate_response("润色后")
+        mock_ctx.add_message("qq:g:1", "你好", is_bot=False)
+
+        cfg = PolishConfig(use_jargon=False)
+        svc = PolishService(ctx=mock_ctx, config=cfg, use_jargon=False, prompt_service=prompt_service)
+        await svc.polish(result="原始", stream_id="qq:g:1", is_group=True)
+
+        call = mock_ctx.llm.call_history[-1]
+        system_prompt = next(m["content"] for m in call["prompt"] if m["role"] == "system")
+        assert "你是小美，现在请你读读" in system_prompt
+        assert "麦麦" not in system_prompt
+
+        # 未配置昵称时兜底"麦麦"
+        mock_ctx._config_values.pop("bot.nickname")
+        mock_ctx.llm.set_generate_response("润色后")
+        await svc.polish(result="原始", stream_id="qq:g:1", is_group=True)
+        call = mock_ctx.llm.call_history[-1]
+        system_prompt = next(m["content"] for m in call["prompt"] if m["role"] == "system")
+        assert "你是麦麦，现在请你读读" in system_prompt
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # _match_jargons — 黑话机械匹配内部逻辑（真实 MockCtx DB 记录）

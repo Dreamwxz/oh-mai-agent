@@ -4,7 +4,8 @@
    "path": "agent_system.md",
    "variables": [
     "title",
-    "intent"
+    "intent",
+    "bot_name"
    ]
   },
   "title": {
@@ -21,7 +22,8 @@
     "result",
     "requester",
     "personality",
-    "reply_style"
+    "reply_style",
+    "bot_name"
    ]
   },
   "planner_board": {
@@ -45,14 +47,16 @@
    "variables": [
     "kind",
     "content",
-    "note_id"
+    "note_id",
+    "bot_name"
    ]
   },
   "subagent_system": {
    "path": "subagent_system.md",
    "variables": [
     "intent",
-    "tool_list"
+    "tool_list",
+    "bot_name"
    ]
   }
  }

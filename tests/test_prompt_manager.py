@@ -33,10 +33,13 @@ class TestRender:
     """正常路径渲染测试。"""
 
     def test_render_agent_system(self, mgr: PromptManager) -> None:
-        result = mgr.render("agent_system", title="测试任务", intent="写一个测试")
+        result = mgr.render(
+            "agent_system", title="测试任务", intent="写一个测试", bot_name="小美",
+        )
         assert "测试任务" in result
         assert "写一个测试" in result
         assert "你是 MaiBot 的离线任务 Agent" in result
+        assert "你是小美（MaiBot）的一部分" in result
         assert "{{" not in result
 
     def test_render_polish(self, mgr: PromptManager) -> None:
@@ -48,12 +51,14 @@ class TestRender:
             requester="",
             personality="你是一个大二女大学生",
             reply_style="风格平淡简短",
+            bot_name="麦麦",
         )
         assert "用户A说了你好" in result
         assert "黑话1, 黑话2" in result
         assert "这是原始回复内容" in result
         assert "你是一个大二女大学生" in result
         assert "风格平淡简短" in result
+        assert "你是麦麦，现在请你读读" in result
         assert "{{" not in result
 
     def test_render_title(self, mgr: PromptManager) -> None:
@@ -72,7 +77,7 @@ class TestValidation:
 
     def test_extra_undeclared_variable_raises(self, mgr: PromptManager) -> None:
         with pytest.raises(ValueError, match="does not declare"):
-            mgr.render("agent_system", title="t", intent="i", extra_var="x")
+            mgr.render("agent_system", title="t", intent="i", bot_name="麦麦", extra_var="x")
 
     def test_unknown_template_raises(self, mgr: PromptManager) -> None:
         with pytest.raises(KeyError, match="nonexistent"):
@@ -97,7 +102,7 @@ class TestAllPlacholdersReplaced:
 
     def test_all_templates_render_fully(self, mgr: PromptManager) -> None:
         test_data = {
-            "agent_system": {"title": "T", "intent": "I"},
+            "agent_system": {"title": "T", "intent": "I", "bot_name": "麦麦"},
             "title": {"intent": "I"},
             "polish": {
                 "context": "C",
@@ -106,6 +111,7 @@ class TestAllPlacholdersReplaced:
                 "requester": "",
                 "personality": "",
                 "reply_style": "",
+                "bot_name": "麦麦",
             },
         }
         for name, data in test_data.items():

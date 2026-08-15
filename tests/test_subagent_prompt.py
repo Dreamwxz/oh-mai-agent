@@ -79,11 +79,22 @@ class TestSubAgentSystemBuilder:
             pm.render("subagent_system")
 
     def test_defaults_to_empty_when_missing_via_builder(self, svc: PromptService) -> None:
-        # builder 侧缺省空串兜底：两个声明变量始终有值，渲染不抛错
+        # builder 侧缺省空串兜底：声明变量始终有值，渲染不抛错
         prompt = svc.build("subagent_system")
         assert "<intent>" in prompt
         assert "<tools>" in prompt
         assert "{{" not in prompt
+
+    def test_bot_name_override(self, svc: PromptService) -> None:
+        """bot_name 传入时替换检索工具说明中的硬编码昵称。"""
+        prompt = svc.build(
+            "subagent_system",
+            intent="查天气",
+            tool_list="- search_web: 网页搜索",
+            bot_name="小美",
+        )
+        assert "检索小美的长期记忆" in prompt
+        assert "麦麦" not in prompt
 
     def test_registered_in_all_builders(self) -> None:
         assert any(b.name == "subagent_system" for b in ALL_BUILDERS)

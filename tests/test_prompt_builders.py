@@ -60,6 +60,23 @@ class TestAgentSystemBuilder:
         assert "T" in prompt
         assert "I" in prompt
 
+    def test_bot_name_defaults_to_maimei(self, pm: PromptManager) -> None:
+        """bot_name 缺省时兜底"麦麦"（与 MaiBot nickname 默认值一致）。"""
+        task = make_task("t1", title="T", intent="I")
+        prompt = AgentSystemBuilder(pm=pm).build(PromptContext(task=task))
+        assert "你是麦麦（MaiBot）的一部分" in prompt
+        assert "符合麦麦的风格" in prompt
+
+    def test_bot_name_override(self, pm: PromptManager) -> None:
+        """bot_name 传入时替换模板中的硬编码昵称。"""
+        task = make_task("t1", title="T", intent="I")
+        prompt = AgentSystemBuilder(pm=pm).build(
+            PromptContext(task=task, data={"bot_name": "小美"})
+        )
+        assert "你是小美（MaiBot）的一部分" in prompt
+        assert "符合小美的风格" in prompt
+        assert "麦麦" not in prompt
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TitleBuilder — 任务标题
@@ -160,6 +177,17 @@ class TestPolishBuilder:
         }))
         assert "委托人" not in prompt
         assert "转达纪律" not in prompt
+
+    def test_bot_name_override(self, pm: PromptManager) -> None:
+        """bot_name 传入时替换开场与默认人格行中的硬编码昵称。"""
+        builder = PolishBuilder(pm=pm)
+        prompt = builder.build(PromptContext(data={
+            "jargon": [], "context": "ctx", "result": "r",
+            "bot_name": "小美",
+        }))
+        assert "你是小美，现在请你读读" in prompt
+        assert "保持小美的人格" in prompt
+        assert "麦麦" not in prompt
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -309,6 +337,28 @@ class TestContextNoteBuilder:
         assert "你好" in prompt
         assert "麦麦在此流发送了消息" in prompt
         assert "<plugin_context_note" in prompt
+
+    def test_bot_name_override(self, pm: PromptManager) -> None:
+        """bot_name 传入时替换两种注释格式中的硬编码昵称。"""
+        builder = ContextNoteBuilder(pm=pm)
+        sent = builder.build(PromptContext(data={
+            "kind": "sent-message", "content": "你好", "bot_name": "小美",
+        }))
+        reply = builder.build(PromptContext(data={
+            "kind": "task-reply", "content": "你好", "bot_name": "小美",
+        }))
+        assert "小美在此流发送了消息" in sent
+        assert "小美此前在此流发送了任务消息" in reply
+        assert "麦麦" not in sent
+        assert "麦麦" not in reply
+
+    def test_bot_name_escaped(self, pm: PromptManager) -> None:
+        """bot_name 进入 XML 块文本，须与 content 同样转义。"""
+        builder = ContextNoteBuilder(pm=pm)
+        prompt = builder.build(PromptContext(data={
+            "kind": "task-reply", "content": "x", "bot_name": "小<美>&",
+        }))
+        assert "小&lt;美&gt;&amp;" in prompt
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

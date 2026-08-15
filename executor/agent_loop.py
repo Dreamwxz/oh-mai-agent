@@ -582,6 +582,8 @@ class AgentLoop:
             # ── 2. 构建 Agent 上下文 ──────────────────────────────
             system_prompt = self._prompt_service.build(
                 "agent_system", task=task,
+                # 主程序 [bot].nickname：缺省空串（builder 兜底"麦麦"）
+                bot_name=str(await self._ctx.config.get("bot.nickname", "") or ""),
             )
             messages: list[dict[str, Any]] = [
                 {"role": "system", "content": system_prompt}

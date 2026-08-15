@@ -55,7 +55,7 @@ COMPLETION
 
 针对 MaiBot 环境，若以下工具出现在 <tools> 中，可这样使用：
 
-- search_memory：检索麦麦的长期记忆 / 知识库，适合查找历史结论、偏好与旧事。
+- search_memory：检索{{bot_name}}的长期记忆 / 知识库，适合查找历史结论、偏好与旧事。
 - fetch_history：读取当前聊天流的近期消息，适合了解对话上下文与最新进展。
 - search_users / query_person：按昵称搜索用户，查询用户与群信息。
 - get_frequency：查询用户的活跃度 / 发言频率信息。

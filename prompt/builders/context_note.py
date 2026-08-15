@@ -53,8 +53,11 @@ class ContextNoteBuilder(PromptBuilder):
             ctx.data.get("id")
             or f"oh-mai-agent:note:{int(time.time() * 1000)}"
         )
+        # bot_name 为机器人昵称（主程序 [bot].nickname，由调用方传入）；
+        # 缺省兜底"麦麦"（与 MaiBot nickname 默认值一致）。
+        bot_name: str = str(ctx.data.get("bot_name", "") or "麦麦")
 
-        # XML 转义保留在 builder：kind/content/note_id 传入模板前均已转义，
+        # XML 转义保留在 builder：kind/content/note_id/bot_name 传入模板前均已转义，
         # 模板 autoescape=False，不会二次转义。
         # 转义的关键目的是防止 content 注入 </plugin_context_note> 等标签拆出 XML 块。
         return self._pm.render(
@@ -62,4 +65,5 @@ class ContextNoteBuilder(PromptBuilder):
             kind=escape(kind),
             content=escape(content),
             note_id=escape(note_id),
+            bot_name=escape(bot_name),
         )

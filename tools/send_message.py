@@ -119,6 +119,8 @@ async def _send_to_stream(
                 kind="sent-message",
                 content=text,
                 id=note_id,
+                # 主程序 [bot].nickname：缺省空串（builder 兜底"麦麦"）
+                bot_name=str(await ctx.config.get("bot.nickname", "") or ""),
             )
             await ctx.maisaka.context.append(
                 stream_id=stream_id,

@@ -24,13 +24,13 @@
 
 | Builder | name | 场景 | 模板 |
 |---|---|---|---|
-| `AgentSystemBuilder` | `agent_system` | Agent 循环的 system prompt，注入任务标题与意图 | `agent_system.md` |
+| `AgentSystemBuilder` | `agent_system` | Agent 循环的 system prompt，注入任务标题、意图与机器人昵称 | `agent_system.md` |
 | `TitleBuilder` | `title` | LLM 生成 15 字内标题 | `title.md` |
-| `PolishBuilder` | `polish` | 回复润色的 system prompt，注入聊天上下文、黑话表、原始结果、主程序人格与表达风格 | `polish.md` |
+| `PolishBuilder` | `polish` | 回复润色的 system prompt，注入聊天上下文、黑话表、原始结果、主程序人格/表达风格与昵称 | `polish.md` |
 | `PlannerBoardBuilder` | `planner_board` | Planner 看板 XML 块，注入活跃/定时/最近任务 | `planner_board.md` |
 | `InjectionMessageBuilder` | `injection` | 指令注入的 system 消息格式化 | `injection.md` |
 | `ContextNoteBuilder` | `context_note` | 跨流/长时任务的动机小提示 | `context_note.md` |
-| `SubAgentSystemBuilder` | `subagent_system` | 子 Agent 的 system prompt，注入意图与工具列表 | `subagent_system.md` |
+| `SubAgentSystemBuilder` | `subagent_system` | 子 Agent 的 system prompt，注入意图、工具列表与机器人昵称 | `subagent_system.md` |
 
 每个 builder 的 `build(ctx)` 都从 `ctx.task` / `ctx.data` 提取参数，调用 `self._pm.render(name, ...)` 渲染对应模板。**XML 转义在 builder 侧完成**：injection / context_note 在把变量传入模板前先经 `xml.sax.saxutils.escape` 转义（如 `context_note.py:60-65`），防止注入内容拆出 XML 块；模板侧 `autoescape=False`，不会二次转义。二者分工明确。
 
@@ -58,13 +58,13 @@
 
 | 模板 | 变量 |
 |---|---|
-| `agent_system.md` | `title`, `intent` |
+| `agent_system.md` | `title`, `intent`, `bot_name` |
 | `title.md` | `intent` |
-| `polish.md` | `context`, `jargon`, `result`, `requester`, `personality`, `reply_style` |
+| `polish.md` | `context`, `jargon`, `result`, `requester`, `personality`, `reply_style`, `bot_name` |
 | `planner_board.md` | `session_id`, `active`, `scheduled`, `recent` |
 | `injection.md` | `instruction`, `note_id` |
-| `context_note.md` | `kind`, `content`, `note_id` |
-| `subagent_system.md` | `intent`, `tool_list` |
+| `context_note.md` | `kind`, `content`, `note_id`, `bot_name` |
+| `subagent_system.md` | `intent`, `tool_list`, `bot_name` |
 
 **新增一个提示词场景**的步骤：在 `prompt/templates/` 下创建 `.md` 模板（用 `{{var}}` 占位符）→ 在 `index.json` 注册 `path` 与 `variables` → 在 `prompt/builders/` 新建 builder 子类（声明 `name`、实现 `build(ctx)` 调 `self._pm.render()`）→ 在 `ALL_BUILDERS` 列表注册实例（`prompt/builders/__init__.py`）→ 调用方经 `prompt_service.build("xxx", ...)` 使用。模板变量声明必须与 `index.json` 一致，XML 转义在 builder 侧完成。
 
