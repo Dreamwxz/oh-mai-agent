@@ -20,7 +20,7 @@ def plugin_with_ctx() -> MaibotAgentPlugin:
     from pathlib import Path
     from types import SimpleNamespace
 
-    from oh_mai_agent.executor.instant import ReplySender
+    from oh_mai_agent.executor.sender import ReplySender
     from oh_mai_agent.prompt.manager import PromptManager
 
     p = MaibotAgentPlugin()

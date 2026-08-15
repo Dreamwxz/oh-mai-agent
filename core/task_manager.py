@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..executor.context import current_task, make_role_provider
-from ..executor.instant import ReplySender
+from ..executor.sender import ReplySender
 from ..config import MaibotAgentConfig
 from ..executor import ExecutionContext, ExecutorFactory, make_exec_ctx
 from ..executor.tool_registrar import ToolWiring, register_agent_tools

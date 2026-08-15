@@ -23,7 +23,8 @@ from oh_mai_agent.core.scheduler import TaskScheduler
 from oh_mai_agent.domain.task_record import TaskLevel, TaskRecord, TaskStatus, TriggerType
 from oh_mai_agent.domain.task_store import TaskStore
 from oh_mai_agent.executor.base import ExecutionContext
-from oh_mai_agent.executor.instant import InstantExecutor, ReplySender
+from oh_mai_agent.executor.instant import InstantExecutor
+from oh_mai_agent.executor.sender import ReplySender
 from oh_mai_agent.bus.messages import CommandKind, TaskCommand
 
 

@@ -2,7 +2,7 @@
 
 任务执行完，最终回复怎么送出去、以什么面目送出去，是最后一个值得设计的问题。本功能回答两条：回复要不要加工（LLM 润色 + 黑话匹配），以及加工后怎么可靠送达（两条发送出口 + 指数退避重试）。
 
-**核心模块**：`executor/instant.py`（`ReplySender` 两条发送出口 + `PolishService` 润色 + 失败处理）+ `executor/splitter.py`（确定性回复分割器）。
+**核心模块**：`executor/sender.py`（`ReplySender` 两条发送出口 + `PolishService` 润色 + `fail_task` 失败处理，全插件共用的发送基础设施）+ `executor/splitter.py`（确定性回复分割器）。
 
 ## 设计目标
 
@@ -28,16 +28,16 @@
 
 **回复的完整链路**。agent 任务完成后，AgentExecutor 的 `send_final` 回调默认就是 `TaskControl._dispatch_reply_instant()`（core/usecases/task_control.py:49-72）：把回复文本拆成一个新的 INSTANT reply 任务（`stream_id=task.reply_target`、经 `mark_as_reply()` 打标记，键 `META_IS_REPLY`）落库并交给调度器入队。调度器通过 `enqueue` 将任务加入 PENDING 队列，随后 `_try_dispatch` 检查并发额度，额度可用时 `transition(RUNNING)` 并 `create_task(InstantExecutor.execute(...))`。回复任务不经过 AgentLoop，不占用 agent 并发额度，走的是独立的 instant 执行通道。
 
-`InstantExecutor.execute()` 是整个回复路径的终点：经 `exec_ctx.sender`（`ReplySender`）发送——`send_polished` 润色分割发送，跨流回复（`reply_stream_id` 或 `is_reply_task()`）再补 `append_motivation_note` 动机注释，随后判终态收尾。整个执行路径不跨进程，上下文经 `executor/context.py` 的 `current_task` ContextVar 传递。执行结果（COMPLETED / FAILED）通过 `scheduler.on_task_completed()` 回调通知调度器释放额度，不经过命令总线的事件分发——instant 任务没有 AgentLoop 那样的事件监听循环，终态通知是直调的。
+`InstantExecutor.execute()` 是整个回复路径的终点：经 `exec_ctx.sender`（`ReplySender`）发送——`send_polished` 润色分割发送，跨流回复（`reply_stream_id` 或 `is_reply_task()`）再补 `append_motivation_note` 动机注释，随后判终态收尾。整个执行路径不跨进程，上下文经 `executor/context.py` 的 `current_task` ContextVar 传递。执行结果（COMPLETED / FAILED）通过 `scheduler.on_task_completed()` 回调通知调度器释放额度——终态通知统一直调（事件通道已删除），时序可预期。
 
-**ReplySender：两条发送出口**。`ReplySender`（executor/instant.py）是统一发送出口，构造时注入 `ctx` / `config_getter`（每次读取，热更新生效）/ `prompt_service`：
+**ReplySender：两条发送出口**。`ReplySender`（executor/sender.py）是统一发送出口，构造时注入 `ctx` / `config_getter`（每次读取，热更新生效）/ `prompt_service`：
 
 - **出口1 `send_raw(text, stream_id)`**：直发。分割（跟随 `config.splitter`）+ 指数退避重试（`config.send.max_retries`），无润色、无上下文写入。用于**确定性文本**——命令回复、失败通知，内容不能被 LLM 改写。
 - **出口2 `send_polished(text, stream_id, *, relay_from=None)`**：完整链路。信息获取（上下文/黑话，内聚在 `PolishService`）→ 润色 → 复用出口1的发送段。用于**任务回复、提问、send_message 工具**。`relay_from` 非空 = 转达他人之言（润色点名委托人），缺省 = 本人发言。
 
 两个出口共享内部 `_split`（分割）与 `_send_segments`（重试），**但都不做任何 `context.append`**——发送出口只对用户可见。
 
-**PolishService：黑话匹配评分**。`PolishService`（executor/instant.py）是润色核心，三件事：
+**PolishService：黑话匹配评分**。`PolishService`（executor/sender.py）是润色核心，三件事：
 
 1. `_load_context()` 拉取目标流最近消息（排除 bot 自己的消息），数量跟随 MaiBot 全局配置（群聊 `chat.max_context_size` 默认 40，私聊 `chat.max_private_context_size` 默认 60）；
 2. `_match_jargons()` 机械子串匹配黑话——复刻 MaiBot `jargon_context_matcher` 的匹配与评分：`_jargon_in_scope` 按 `is_global` 或 `session_id_dict` 过滤黑话范围，`_calculate_match_score` 复刻高频词加权评分（命中高频词加 1000 分基数、按出现次数加权、按消息位置微调），取前 `MAX_JARGON_REFERENCE_MATCHES`（10）条；
@@ -47,7 +47,7 @@
 
 **PolishService 的构造与提示词注入**。PolishService 构造时只接受 `ctx`、`config`（`PolishConfig`）与 `prompt_service`——`prompt_manager` 是传而不用、已被移除的冗余依赖。`polish()` 内部调用 `prompt_service.build("polish", ...)` 而非直接渲染模板——这是为了复用已有的 builder 注册机制，确保润色提示词也经过模板校验（`PromptManager.render` 的变量超集/子集检查）和 XML 转义。若 `prompt_service` 为 None，则由 `PolishBuilder` 兜底，但这只是一种容错回退，正常运行时永远不会触发。
 
-**转达模式：自动判定 + 单一 `relay_from` 通道**。润色只有一种模式切换：**这条消息是本人发言还是转达他人之言**。`send_polished` 的 `relay_from` 参数承载这个判断——非空（如 `"张三"`）= 转达，`polish` 模板输出转达纪律块并点名委托人（"由 张三 委托"）；缺省 = 本人发言，不输出转达块。`relay_from` 由**自动转达判定**填充（`executor/instant.py` 的 `_resolve_relay`）：比对任务发起人（`task.owner`，创建入口拼的 `platform:user_id`）与目标私聊流用户（`chat.get_all_streams` 反查，宿主 session_id 为哈希无法直接解析），不同即转达、点名发起人昵称（`chat.get_stream_by_user_id` 反查，兜底 owner 原文）。两条注入路径：**任务回复**（`InstantExecutor`）与 **send_message 工具**（Agent 循环版经 `resolve_relay` 回调基于 `current_task` 判定）；Planner 版无任务上下文，一律本人发言。**群目标无单一传出用户，不自动转达**（避免"我自己转达我自己"的怪象）；判定失败/流未找到一律保守按本人发言处理。
+**转达模式：自动判定 + 单一 `relay_from` 通道**。润色只有一种模式切换：**这条消息是本人发言还是转达他人之言**。`send_polished` 的 `relay_from` 参数承载这个判断——非空（如 `"张三"`）= 转达，`polish` 模板输出转达纪律块并点名委托人（"由 张三 委托"）；缺省 = 本人发言，不输出转达块。`relay_from` 由**自动转达判定**填充（`executor/sender.py` 的 `resolve_relay`）：比对任务发起人（`task.owner`，创建入口拼的 `platform:user_id`）与目标私聊流用户（`chat.get_all_streams` 反查，宿主 session_id 为哈希无法直接解析），不同即转达、点名发起人昵称（`chat.get_stream_by_user_id` 反查，兜底 owner 原文）。两条注入路径：**任务回复**（`InstantExecutor`）与 **send_message 工具**（Agent 循环版经 `resolve_relay` 回调基于 `current_task` 判定）；Planner 版无任务上下文，一律本人发言。**群目标无单一传出用户，不自动转达**（避免"我自己转达我自己"的怪象）；判定失败/流未找到一律保守按本人发言处理。
 
 **润色模板与主程序 replyer 对齐**。`polish.md` 的段落顺序刻意对齐 MaiBot 主程序回复生成提示词（`prompts/zh-CN/maisaka_replyer.prompt`）：人格设定（对应 `{identity}`，取自主程序 `[personality].personality`）→ 表达风格（对应 `{reply_style}`，取自主程序 `[personality].reply_style`）→ 参考信息软约束（对应"你可以参考【回复信息参考】中的信息，但是视情况而定，不用完全遵守"）→ 注意事项位 → 输入材料 → 输出指令（结尾对应 `replyer_output_instruction` 的中文文案）。人格、表达风格与机器人昵称（`[bot].nickname`，缺省"麦麦"）在 `PolishService.polish()` 每次经 `ctx.config.get` 读取主程序配置，热更新即时生效；未配置（空串）时模板不输出人格/风格节，保留默认人格行（以 `{{bot_name}}` 命名，兜底"麦麦"）。两处无法与主程序一致的插件特有内容单独安放：一是**转达纪律块放在注意事项位**——对应主程序 `group_chat_attention_block`（"在该聊天中的注意事项"）的位置，两者都是"本条消息的场景级纪律，优先于一般润色要求"；二是上下文、黑话表与原始结果集中为【输入材料】节（主程序 replyer 的聊天记录经自身机制注入，此处以显式材料呈现）。
 
@@ -61,7 +61,7 @@
 
 **上下文注释：独立能力**。`ReplySender.append_motivation_note(stream_id, content)` 是对用户不可见的上下文写入：用 `context_note` 模板渲染任务动机生成 XML 标签，写入目标流，让从别处发来的任务结果在聊天上下文里可追溯。判断条件由调用方决定——`InstantExecutor.execute()` 对跨流回复（`task.reply_stream_id` 或 `is_reply_task()`）调用它，覆盖了通过 `_dispatch_reply_instant` 创建的回复任务。send_message 工具（`tools/send_message.py`）也保留自己的上下文记录（纯文本 + XML `sent-message`），显式调用 `ctx.maisaka.context.append`——同样是"发送出口纯发送、上下文写入由工具层显式负责"的体现。
 
-**成功与失败的终态收尾**。发送成功后，`execute()` 重新 `store.get` 判终态（防并发终态覆盖），非终态才走 `complete_and_notify`（executor/base.py:114-118）：`transition(COMPLETED)`（竞争时 `force` 兜底）→ 落库 → `scheduler.on_task_completed()` 释放并发额度。异常路径走 `fail_task()`（executor/instant.py）：先做双重终态守卫——本地 `is_terminal()` 直接返回，再重载持久化记录检查（防进程内快照过期）——随后可选 `send_message` 先发"任务执行失败"通知（**走 `send_raw` 直发出口**：错误文本是确定性内容，不应被润色改写；失败通知本身发送失败也不影响状态更新，异常静默吞掉），再 `transition(FAILED)`、被状态机拒绝时 `force(FAILED)` 兜底，落盘并通知调度器。终态守卫的意义在于：任务可能已被调度器超时判 FAILED 或用户取消，执行器不能用一个过期的进程内快照覆盖并发终态。`fail_task` 的 `send_message` 可选特性也说明：失败通知不是必须的——`execute()` 异常路径总是 `send_message=True`，但其他调用方（如 AgentLoop 的异常处理）可以选择不发消息，只悄悄地标记 FAILED。
+**成功与失败的终态收尾**。发送成功后，`execute()` 重新 `store.get` 判终态（防并发终态覆盖），非终态才走 `complete_and_notify`（executor/base.py:114-118）：`transition(COMPLETED)`（竞争时 `force` 兜底）→ 落库 → `scheduler.on_task_completed()` 释放并发额度。异常路径走 `fail_task()`（executor/sender.py）：先做双重终态守卫——本地 `is_terminal()` 直接返回，再重载持久化记录检查（防进程内快照过期）——随后可选 `send_message` 先发"任务执行失败"通知（**走 `send_raw` 直发出口**：错误文本是确定性内容，不应被润色改写；失败通知本身发送失败也不影响状态更新，异常静默吞掉），再 `transition(FAILED)`、被状态机拒绝时 `force(FAILED)` 兜底，落盘并通知调度器。终态守卫的意义在于：任务可能已被调度器超时判 FAILED 或用户取消，执行器不能用一个过期的进程内快照覆盖并发终态。`fail_task` 的 `send_message` 可选特性也说明：失败通知不是必须的——`execute()` 异常路径总是 `send_message=True`，但其他调用方（如 AgentLoop 的异常处理）可以选择不发消息，只悄悄地标记 FAILED。
 
 **调用路径汇总**。`ReplySender` 的两条出口是所有回复的统一入口，调用方按语义选择：
 

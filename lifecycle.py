@@ -24,6 +24,7 @@ from .core.scheduler import TaskScheduler
 from .core.task_manager import TaskManager
 from .domain.task_record import TaskLevel, TaskRecord
 from .domain.task_store import TaskStore
+from .executor.sender import ReplySender
 from .tools.mcp.provider import MCPManager, unregister_stale_mcp_tools
 from .permission import PermissionResolver
 from .planner_hooks import PlannerBoard
@@ -83,8 +84,6 @@ async def load_plugin(plugin: "MaibotAgentPlugin") -> None:
 
     # 4.2. ReplySender — 统一发送出口（直发 / 完整润色 + 上下文注释）
     # config_getter 每次调用读取，配置热更新立即生效
-    from .executor.instant import ReplySender
-
     plugin._sender = ReplySender(
         ctx=plugin.ctx,
         config_getter=lambda: plugin.config,

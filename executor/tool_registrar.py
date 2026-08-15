@@ -28,7 +28,7 @@ from ..tools.agent.subagent_tool import build_subagent_tool, build_subagents_too
 from ..tools.agent.task_mgmt import build_task_mgmt_tools
 from ..tools.send_message import build_send_tool
 from .context import current_task
-from .instant import _resolve_relay
+from .sender import resolve_relay
 
 logger = logging.getLogger(__name__)
 
@@ -130,7 +130,7 @@ async def register_agent_tools(w: ToolWiring) -> None:
         task = current_task.get()
         if task is None:
             return None
-        return await _resolve_relay(w.ctx, task.owner or "", stream_id)
+        return await resolve_relay(w.ctx, task.owner or "", stream_id)
 
     send_msg_tool = build_send_tool(
         w.ctx,

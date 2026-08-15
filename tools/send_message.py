@@ -17,7 +17,7 @@
 工具固定走完整发送出口（润色 + 分割 + 重试，见 ``ReplySender``），不再暴露
 ``polish`` / ``split`` 开关。转达（relay）由自动判定完成：Agent 循环版经注入的
 ``resolve_relay`` 回调判定"目标用户 ≠ 任务发起人"即点名委托人（见
-``executor/instant.py`` 的 ``_resolve_relay``）；Planner 版无任务上下文，
+``executor/sender.py`` 的 ``resolve_relay``）；Planner 版无任务上下文，
 不做转达判定（一律本人发言）。
 """
 

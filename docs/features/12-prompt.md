@@ -44,7 +44,7 @@
 - **指令注入消费**：每轮 LLM 调用前 `_consume_injections()` 经 `take_injections()` 弹出待注入指令，逐条经 `_build_injection_message()` 格式化为 system 消息插入，并落历史（`agent_loop.py:234-256`）。
 - **注入消息格式化**：`_build_injection_message()` 调用 `prompt_service.build("injection", instruction=...)`（`agent_loop.py:227-233`）。历史回放时 injection 条目同样重建为 system 消息，保证恢复后上下文一致（`agent_loop.py:390-394`）。
 
-其余 builder 的调用点：`title` 在任务创建时（`lifecycle.py` 的 `llm_title` 回调），`polish` 在 `PolishService.polish()`（`executor/instant.py`），`planner_board` 在 `PlannerBoard.build_summary()`（`planner_hooks.py:120`），`context_note` 在 `ReplySender.append_motivation_note()`（跨流回复补写动机注释，`executor/instant.py`）。
+其余 builder 的调用点：`title` 在任务创建时（`lifecycle.py` 的 `llm_title` 回调），`polish` 在 `PolishService.polish()`（`executor/sender.py`），`planner_board` 在 `PlannerBoard.build_summary()`（`planner_hooks.py:120`），`context_note` 在 `ReplySender.append_motivation_note()`（跨流回复补写动机注释，`executor/sender.py`）。
 
 **为什么 builder 不入插件主流程的 pydantic 配置**：提示词是内容不是参数，模板本身就是配置。把模板目录视为「提示词的配置节」，`index.json` 是其 schema——这比给每个提示词加配置项更简单，也让提示词与代码解耦得更彻底。
 

@@ -23,7 +23,7 @@ from oh_mai_agent.core.usecases.task_control import TaskControl
 from oh_mai_agent.domain.task_record import TaskLevel, TaskRecord, TaskStatus, TriggerType
 from oh_mai_agent.domain.task_store import TaskStore
 from oh_mai_agent.executor.base import ExecutionContext
-from oh_mai_agent.executor.instant import ReplySender, fail_task
+from oh_mai_agent.executor.sender import ReplySender, fail_task
 from oh_mai_agent.permission import PermissionResolver, Role
 from oh_mai_agent.prompt.builders.context_note import ContextNoteBuilder
 from oh_mai_agent.prompt.service import PromptService
@@ -1177,7 +1177,7 @@ class TestInstantFailSend:
 
         await mgr.execute_instant(task)
 
-        # execute_instant 捕获保存异常后调用 fail_task（来自 executor/instant.py）
+        # execute_instant 捕获保存异常后调用 fail_task（来自 executor/sender.py）
         assert len(mock_ctx._sent_messages) >= 1, (
             f"instant fail should send at least one message: {mock_ctx._sent_messages}"
         )
@@ -1189,7 +1189,7 @@ class TestInstantFailSend:
         self, mock_ctx: MockCtx, resolver: PermissionResolver, config: MaibotAgentConfig,
         real_store: TaskStore,
     ) -> None:
-        """fail_task（executor.instant）在 send_message=True 时发送润色后的失败消息。"""
+        """fail_task（executor.sender）在 send_message=True 时发送润色后的失败消息。"""
         await real_store.init()
         sched = FakeScheduler()
 
@@ -1223,7 +1223,7 @@ class TestInstantFailSend:
         self, mock_ctx: MockCtx, resolver: PermissionResolver, config: MaibotAgentConfig,
         real_store: TaskStore,
     ) -> None:
-        """fail_task（executor.instant）在 send_message=False 时不发送任何消息。"""
+        """fail_task（executor.sender）在 send_message=False 时不发送任何消息。"""
         await real_store.init()
         sched = FakeScheduler()
 

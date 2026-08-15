@@ -1,4 +1,4 @@
-"""executor/instant.py 的测试 —— ReplySender 两条出口、重试、is_group 推导、动机注释。"""
+"""executor/sender.py + instant.py 的测试 —— ReplySender 两条出口、重试、is_group 推导、动机注释。"""
 
 from __future__ import annotations
 
@@ -13,11 +13,11 @@ from conftest import MockCtx, make_task
 from oh_mai_agent.config import MaibotAgentConfig
 from oh_mai_agent.domain.task_record import TaskLevel, TaskStatus, TriggerType
 from oh_mai_agent.executor.base import ExecutionContext, complete_and_notify
-from oh_mai_agent.executor.instant import (
-    InstantExecutor,
+from oh_mai_agent.executor.instant import InstantExecutor
+from oh_mai_agent.executor.sender import (
     ReplySender,
-    _resolve_auto_relay,
     fail_task,
+    resolve_auto_relay,
 )
 from oh_mai_agent.prompt.builders.context_note import ContextNoteBuilder
 from oh_mai_agent.prompt.manager import PromptManager
@@ -159,7 +159,7 @@ class TestSendPolishedIsGroupDerivation:
             return "润色后文本"
 
         sender = _make_sender(ctx, config)
-        with patch("oh_mai_agent.executor.instant.PolishService.polish", fake_polish):
+        with patch("oh_mai_agent.executor.sender.PolishService.polish", fake_polish):
             await sender.send_polished("test", "qq:group:1")
 
         assert captured["is_group"] is True
@@ -179,7 +179,7 @@ class TestSendPolishedIsGroupDerivation:
             return "润色后文本"
 
         sender = _make_sender(ctx, config)
-        with patch("oh_mai_agent.executor.instant.PolishService.polish", fake_polish):
+        with patch("oh_mai_agent.executor.sender.PolishService.polish", fake_polish):
             await sender.send_polished("test", "qq:10001")
 
         assert captured["is_group"] is False
@@ -201,7 +201,7 @@ class TestSendPolishedRelayFrom:
             return "润色后文本"
 
         sender = _make_sender(ctx, config)
-        with patch("oh_mai_agent.executor.instant.PolishService.polish", fake_polish):
+        with patch("oh_mai_agent.executor.sender.PolishService.polish", fake_polish):
             await sender.send_polished("test", "qq:group:1", relay_from="张三")
 
         assert captured["relay_from"] == "张三"
@@ -221,7 +221,7 @@ class TestSendPolishedRelayFrom:
             return "润色后文本"
 
         sender = _make_sender(ctx, config)
-        with patch("oh_mai_agent.executor.instant.PolishService.polish", fake_polish):
+        with patch("oh_mai_agent.executor.sender.PolishService.polish", fake_polish):
             await sender.send_polished("test", "qq:group:1")
 
         assert captured["relay_from"] is None
@@ -239,7 +239,7 @@ class TestSendPolishedSends:
             return "润色后文本"
 
         sender = _make_sender(ctx, config)
-        with patch("oh_mai_agent.executor.instant.PolishService.polish", fake_polish):
+        with patch("oh_mai_agent.executor.sender.PolishService.polish", fake_polish):
             await sender.send_polished("test", "qq:group:1")
 
         assert len(ctx._sent_messages) == 1
@@ -338,7 +338,7 @@ class TestInstantExecutorExecute:
             config=default_config,
             sender=_make_sender(mock_ctx, default_config),
         )
-        with patch("oh_mai_agent.executor.instant.PolishService.polish", fake_polish):
+        with patch("oh_mai_agent.executor.sender.PolishService.polish", fake_polish):
             result = await InstantExecutor().execute(exec_ctx, task)
 
         saved = await real_store.get(task.id)
@@ -415,7 +415,7 @@ class TestInstantExecutorExecute:
             prompt_service=_make_prompt_service(),
             sender=_make_sender(mock_ctx, default_config, _make_prompt_service()),
         )
-        with patch("oh_mai_agent.executor.instant.PolishService.polish", fake_polish):
+        with patch("oh_mai_agent.executor.sender.PolishService.polish", fake_polish):
             result = await InstantExecutor().execute(exec_ctx, task)
 
         assert result.status == "COMPLETED"
@@ -593,7 +593,7 @@ class TestAutoRelay:
             _make_stream("qq:10001", user_id="10001", user_nickname="千绘莉"),
         ]
         task = make_task(owner="qq:10001", reply_stream_id="qq:20002")
-        assert await _resolve_auto_relay(ctx, task) == "千绘莉"
+        assert await resolve_auto_relay(ctx, task) == "千绘莉"
 
     @pytest.mark.asyncio
     async def test_private_target_same_user_no_relay(self) -> None:
@@ -603,7 +603,7 @@ class TestAutoRelay:
             _make_stream("qq:10001", user_id="10001", user_nickname="千绘莉"),
         ]
         task = make_task(owner="qq:10001", reply_stream_id="qq:10001")
-        assert await _resolve_auto_relay(ctx, task) is None
+        assert await resolve_auto_relay(ctx, task) is None
 
     @pytest.mark.asyncio
     async def test_group_target_no_relay(self) -> None:
@@ -613,7 +613,7 @@ class TestAutoRelay:
             _make_stream("qq:group:2", user_id="", chat_type="group"),
         ]
         task = make_task(owner="qq:10001", reply_stream_id="qq:group:2")
-        assert await _resolve_auto_relay(ctx, task) is None
+        assert await resolve_auto_relay(ctx, task) is None
 
     @pytest.mark.asyncio
     async def test_unknown_owner_no_relay(self) -> None:
@@ -623,7 +623,7 @@ class TestAutoRelay:
             _make_stream("qq:20002", user_id="20002", user_nickname="张三"),
         ]
         task = make_task(owner="unknown:qq:g:1", reply_stream_id="qq:20002")
-        assert await _resolve_auto_relay(ctx, task) is None
+        assert await resolve_auto_relay(ctx, task) is None
 
     @pytest.mark.asyncio
     async def test_malformed_owner_no_relay(self) -> None:
@@ -633,7 +633,7 @@ class TestAutoRelay:
             _make_stream("qq:20002", user_id="20002", user_nickname="张三"),
         ]
         task = make_task(owner="10001", reply_stream_id="qq:20002")
-        assert await _resolve_auto_relay(ctx, task) is None
+        assert await resolve_auto_relay(ctx, task) is None
 
     @pytest.mark.asyncio
     async def test_target_stream_not_found_no_relay(self) -> None:
@@ -641,7 +641,7 @@ class TestAutoRelay:
         ctx = MockCtx()
         ctx._chat_streams = []
         task = make_task(owner="qq:10001", reply_stream_id="qq:20002")
-        assert await _resolve_auto_relay(ctx, task) is None
+        assert await resolve_auto_relay(ctx, task) is None
 
     @pytest.mark.asyncio
     async def test_chat_lookup_failure_no_relay(self) -> None:
@@ -653,7 +653,7 @@ class TestAutoRelay:
         ctx = MockCtx()
         ctx._chat = _BrokenChat()  # type: ignore[assignment]
         task = make_task(owner="qq:10001", reply_stream_id="qq:20002")
-        assert await _resolve_auto_relay(ctx, task) is None
+        assert await resolve_auto_relay(ctx, task) is None
 
     @pytest.mark.asyncio
     async def test_nickname_unavailable_falls_back_to_owner(self) -> None:
@@ -664,7 +664,7 @@ class TestAutoRelay:
             # 发起人流不在列表中（未活跃）→ 拿不到昵称
         ]
         task = make_task(owner="qq:10001", reply_stream_id="qq:20002")
-        assert await _resolve_auto_relay(ctx, task) == "qq:10001"
+        assert await resolve_auto_relay(ctx, task) == "qq:10001"
 
 
 class TestAutoRelayExecute:

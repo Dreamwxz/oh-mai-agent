@@ -7,7 +7,7 @@ from typing import Any
 from conftest import MockCtx
 
 from oh_mai_agent.config import PolishConfig
-from oh_mai_agent.executor.instant import (
+from oh_mai_agent.executor.sender import (
     PolishService,
     _calculate_match_score,
     _jargon_in_scope,

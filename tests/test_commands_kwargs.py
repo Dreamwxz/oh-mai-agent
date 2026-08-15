@@ -107,7 +107,7 @@ async def fake_store(real_store: TaskStore) -> TaskStore:
 @pytest.fixture
 def plugin(fake_store: TaskStore) -> MaibotAgentPlugin:
     from oh_mai_agent.config import MaibotAgentConfig
-    from oh_mai_agent.executor.instant import ReplySender
+    from oh_mai_agent.executor.sender import ReplySender
 
     p = MaibotAgentPlugin()
     p._task_manager = FakeTaskManager(fake_store)
