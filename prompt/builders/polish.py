@@ -25,7 +25,9 @@ class PolishBuilder(PromptBuilder):
     ``_pm`` 为 None 时直接抛出 RuntimeError。
 
     ctx.data 参数：requester 为转达委托人，缺省空串，非空（由 send_polished 的
-    ``relay_from`` 传入）时模板输出转达纪律并点名委托人。
+    ``relay_from`` 传入）时模板输出转达纪律并点名委托人；personality / reply_style
+    为主程序 [personality] 配置（由 PolishService 读取传入），缺省空串，
+    非空时模板输出人格设定与表达风格节。
     """
 
     @property
@@ -45,6 +47,9 @@ class PolishBuilder(PromptBuilder):
         result: str = ctx.data.get("result", "")
         # 转达委托人：缺省为空串；str() 兜底非字符串取值
         requester: str = str(ctx.data.get("requester", ""))
+        # 主程序人格与表达风格（MaiBot [personality] 配置）：缺省为空串
+        personality: str = str(ctx.data.get("personality", ""))
+        reply_style: str = str(ctx.data.get("reply_style", ""))
 
         # 黑话表格式化为 "序号. 黑话：释义"；空表返回占位符 "（无）"
         jargon_text = _format_jargon(jargons)
@@ -58,6 +63,8 @@ class PolishBuilder(PromptBuilder):
             # result 再次归一为空串，避免 None/空值进入模板
             result=result or "",
             requester=requester,
+            personality=personality,
+            reply_style=reply_style,
         )
 
 

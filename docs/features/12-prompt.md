@@ -26,7 +26,7 @@
 |---|---|---|---|
 | `AgentSystemBuilder` | `agent_system` | Agent 循环的 system prompt，注入任务标题与意图 | `agent_system.md` |
 | `TitleBuilder` | `title` | LLM 生成 15 字内标题 | `title.md` |
-| `PolishBuilder` | `polish` | 回复润色的 system prompt，注入聊天上下文、黑话表、原始结果 | `polish.md` |
+| `PolishBuilder` | `polish` | 回复润色的 system prompt，注入聊天上下文、黑话表、原始结果、主程序人格与表达风格 | `polish.md` |
 | `PlannerBoardBuilder` | `planner_board` | Planner 看板 XML 块，注入活跃/定时/最近任务 | `planner_board.md` |
 | `InjectionMessageBuilder` | `injection` | 指令注入的 system 消息格式化 | `injection.md` |
 | `ContextNoteBuilder` | `context_note` | 跨流/长时任务的动机小提示 | `context_note.md` |
@@ -60,7 +60,7 @@
 |---|---|
 | `agent_system.md` | `title`, `intent` |
 | `title.md` | `intent` |
-| `polish.md` | `context`, `jargon`, `result`, `requester` |
+| `polish.md` | `context`, `jargon`, `result`, `requester`, `personality`, `reply_style` |
 | `planner_board.md` | `session_id`, `active`, `scheduled`, `recent` |
 | `injection.md` | `instruction`, `note_id` |
 | `context_note.md` | `kind`, `content`, `note_id` |

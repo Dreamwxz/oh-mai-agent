@@ -46,10 +46,14 @@ class TestRender:
             jargon="黑话1, 黑话2",
             result="这是原始回复内容",
             requester="",
+            personality="你是一个大二女大学生",
+            reply_style="风格平淡简短",
         )
         assert "用户A说了你好" in result
         assert "黑话1, 黑话2" in result
         assert "这是原始回复内容" in result
+        assert "你是一个大二女大学生" in result
+        assert "风格平淡简短" in result
         assert "{{" not in result
 
     def test_render_title(self, mgr: PromptManager) -> None:
@@ -95,7 +99,14 @@ class TestAllPlacholdersReplaced:
         test_data = {
             "agent_system": {"title": "T", "intent": "I"},
             "title": {"intent": "I"},
-            "polish": {"context": "C", "jargon": "J", "result": "R", "requester": ""},
+            "polish": {
+                "context": "C",
+                "jargon": "J",
+                "result": "R",
+                "requester": "",
+                "personality": "",
+                "reply_style": "",
+            },
         }
         for name, data in test_data.items():
             result = mgr.render(name, **data)

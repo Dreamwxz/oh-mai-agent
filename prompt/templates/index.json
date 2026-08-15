@@ -19,7 +19,9 @@
     "context",
     "jargon",
     "result",
-    "requester"
+    "requester",
+    "personality",
+    "reply_style"
    ]
   },
   "planner_board": {

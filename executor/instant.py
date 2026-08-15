@@ -84,6 +84,7 @@ class PolishService:
     """回复润色器：加载上下文 + 黑话匹配 + LLM 风格优化。
 
     复刻 MaiBot 的 ``jargon_context_matcher`` 评分和匹配逻辑，
+    并注入主程序 ``[personality]`` 的人格与表达风格，
     用于 instant/agent 任务结果回复。
     """
 
@@ -115,9 +116,10 @@ class PolishService:
         流程：
         1. 获取目标聊天流的最近消息。
         2. 对消息做机械黑话匹配。
-        3. 构建含上下文和黑话的 system prompt。
-        4. 调用 LLM 润色，将 *result* 作为 user 消息传入。
-        5. 任何异常时返回原始 *result*（绝不阻塞消息发送）。
+        3. 读取主程序 ``[personality]`` 配置（人格与表达风格，每次读取热更新生效）。
+        4. 构建含上下文、黑话、人格与表达风格的 system prompt。
+        5. 调用 LLM 润色，将 *result* 作为 user 消息传入。
+        6. 任何异常时返回原始 *result*（绝不阻塞消息发送）。
 
         Args:
             result: 待润色的原始任务结果文本。
@@ -140,12 +142,21 @@ class PolishService:
             context_preview = (
                 "\n".join(context_texts[-20:]) if context_texts else "（无最近聊天记录）"
             )
+            # 主程序 [personality] 配置：每次读取（热更新生效），空值归一为空串
+            personality = str(
+                await self.ctx.config.get("personality.personality", "") or ""
+            )
+            reply_style = str(
+                await self.ctx.config.get("personality.reply_style", "") or ""
+            )
             system_prompt = self._prompt_service.build(
                 "polish",
                 jargon=jargons,
                 context=context_preview,
                 result=result,
                 requester=relay_from or "",
+                personality=personality,
+                reply_style=reply_style,
             )
 
             llm_result = await self.ctx.llm.generate(

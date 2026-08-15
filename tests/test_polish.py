@@ -120,6 +120,31 @@ class TestBuildPolishSystemPrompt:
         result = builder.build(ctx)
         assert "{{result}}" not in result  # 占位符已被空字符串替换
 
+    def test_personality_and_reply_style_rendered(self, pm: PromptManager) -> None:
+        """personality / reply_style 非空时模板输出人格设定与表达风格节。"""
+        builder = PolishBuilder(pm=pm)
+        ctx = PromptContext(data={
+            "jargon": [],
+            "context": "ctx",
+            "result": "result",
+            "personality": "你是一个大二女大学生",
+            "reply_style": "风格平淡简短",
+        })
+        result = builder.build(ctx)
+        assert "你是一个大二女大学生" in result
+        assert "风格平淡简短" in result
+        # 配置了人格时，默认"麦麦人格"行不再输出（避免与主程序人格冲突）
+        assert "友善、有点俏皮但不油腻、有分寸感" not in result
+
+    def test_personality_empty_keeps_default_persona(self, pm: PromptManager) -> None:
+        """personality / reply_style 缺省空串时，模板不输出对应节，保留默认人格行。"""
+        builder = PolishBuilder(pm=pm)
+        ctx = PromptContext(data={"jargon": [], "context": "ctx", "result": "result"})
+        result = builder.build(ctx)
+        assert "人格设定（来自主程序配置" not in result
+        assert "表达风格（来自主程序配置" not in result
+        assert "友善、有点俏皮但不油腻、有分寸感" in result
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # PolishService
@@ -288,6 +313,47 @@ class TestPolishService:
             is_group=True,
         )
         assert result == "ok"
+
+    @pytest.mark.asyncio
+    async def test_polish_injects_personality_from_main_config(
+        self, mock_ctx: MockCtx, prompt_service: Any
+    ) -> None:
+        """主程序 [personality] 配置（personality / reply_style）注入润色 system prompt。"""
+        mock_ctx._config_values["personality.personality"] = "你是一个高冷的侦探"
+        mock_ctx._config_values["personality.reply_style"] = "惜字如金，风格冷峻"
+        mock_ctx.llm.set_generate_response("润色后")
+        mock_ctx.add_message("qq:g:1", "你好", is_bot=False)
+
+        cfg = PolishConfig(use_jargon=False)
+        svc = PolishService(ctx=mock_ctx, config=cfg, use_jargon=False, prompt_service=prompt_service)
+        await svc.polish(result="原始", stream_id="qq:g:1", is_group=True)
+
+        # 检查传给 LLM 的 system prompt 中包含主程序人格与表达风格
+        call = mock_ctx.llm.call_history[-1]
+        system_prompt = next(m["content"] for m in call["prompt"] if m["role"] == "system")
+        assert "你是一个高冷的侦探" in system_prompt
+        assert "惜字如金，风格冷峻" in system_prompt
+        # 配置了人格时，默认"麦麦人格"行不再输出
+        assert "友善、有点俏皮但不油腻、有分寸感" not in system_prompt
+
+    @pytest.mark.asyncio
+    async def test_polish_no_personality_config_omits_sections(
+        self, mock_ctx: MockCtx, prompt_service: Any
+    ) -> None:
+        """主程序未配置 [personality] 时，system prompt 不包含人格/表达风格节。"""
+        mock_ctx.llm.set_generate_response("润色后")
+        mock_ctx.add_message("qq:g:1", "你好", is_bot=False)
+
+        cfg = PolishConfig(use_jargon=False)
+        svc = PolishService(ctx=mock_ctx, config=cfg, use_jargon=False, prompt_service=prompt_service)
+        await svc.polish(result="原始", stream_id="qq:g:1", is_group=True)
+
+        call = mock_ctx.llm.call_history[-1]
+        system_prompt = next(m["content"] for m in call["prompt"] if m["role"] == "system")
+        assert "人格设定（来自主程序配置" not in system_prompt
+        assert "表达风格（来自主程序配置" not in system_prompt
+        # 默认人格行仍保留
+        assert "友善、有点俏皮但不油腻、有分寸感" in system_prompt
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
