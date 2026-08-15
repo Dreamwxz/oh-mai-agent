@@ -39,7 +39,7 @@ class TaskScheduler:
         self,
         config: TaskConfig,
         store: "TaskStore",  # 前向引用 — 接口契约：save/get/list_active
-        executor: Callable[[TaskRecord], Awaitable[None]],
+        executor: Callable[[TaskRecord], Awaitable[None]] | None = None,
         *,
         command_bus: Any,
     ) -> None:
@@ -48,7 +48,8 @@ class TaskScheduler:
         Args:
             config: 任务调度配置（max_concurrent_tasks / max_runtime_min）。
             store: 任务持久化存储（TaskStore 接口契约）。
-            executor: 任务实际执行回调。
+            executor: 任务实际执行回调（可选；可在构造后经 ``set_executor``
+                绑定，用于打破与 TaskManager 的构造环）。
             command_bus: TaskCommandBus 实例。调度器通过总线事件
                （TaskEvent COMPLETED/FAILED）释放并发额度。
         """
@@ -63,6 +64,10 @@ class TaskScheduler:
         self._check_task: asyncio.Task[Any] | None = None
         self._event_listener_task: asyncio.Task[Any] | None = None
         self._stop_event = asyncio.Event()
+
+    def set_executor(self, executor: Callable[[TaskRecord], Awaitable[None]]) -> None:
+        """后绑定任务执行回调（``start()`` 之前调用）。"""
+        self._executor = executor
 
     # ── 配置热更新 ──────────────────────────────────────────────────
 

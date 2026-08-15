@@ -22,8 +22,33 @@ from maibot_sdk.types import HookMode, HookOrder, ToolParameterInfo, ToolParamTy
 from .config import MaibotAgentConfig
 from .commands import cmd_ask, cmd_cancel, cmd_create, cmd_fallback, cmd_history, cmd_list, cmd_status
 from .lifecycle import apply_config_update, llm_title as llm_title_fn, load_plugin
+from .tools.send_message import SEND_MESSAGE_DESCRIPTION, SEND_MESSAGE_PARAMS
 
 logger = logging.getLogger(__name__)
+
+
+def _send_message_params() -> list[ToolParameterInfo]:
+    """将 send_message 单一参数规范转换为 SDK @Tool 参数列表。
+
+    与 ``tools/send_message.py`` 的 ``params_to_json_schema`` 共用同一份
+    ``SEND_MESSAGE_PARAMS``，保证 Planner @Tool 与 Agent 循环工具的 schema
+    永不漂移。
+    """
+    _type_map: dict[str, ToolParamType] = {
+        "string": ToolParamType.STRING,
+        "boolean": ToolParamType.BOOLEAN,
+        "integer": ToolParamType.INTEGER,
+        "array": ToolParamType.ARRAY,
+    }
+    return [
+        ToolParameterInfo(
+            name=p["name"],
+            param_type=_type_map[p["type"]],
+            description=p["description"],
+            required=bool(p.get("required", False)),
+        )
+        for p in SEND_MESSAGE_PARAMS
+    ]
 
 
 class MaibotAgentPlugin(MaiBotPlugin):
@@ -348,50 +373,9 @@ class MaibotAgentPlugin(MaiBotPlugin):
 
     @Tool(
         "send_message",
-        description=(
-            "向好友/群发送消息（自动创建聊天流、默认润色与长文本分割）。"
-            "转达他人之言必须传 relay_from（委托人姓名/昵称）并点明委托人，"
-            "禁止编造转达内容、禁止冒充本人发言；不传 relay_from 视为本人发言。"
-        ),
+        description=SEND_MESSAGE_DESCRIPTION,
         visibility="deferred",
-        parameters=[
-            ToolParameterInfo(
-                name="text",
-                param_type=ToolParamType.STRING,
-                description="要发送的消息文本",
-                required=True,
-            ),
-            ToolParameterInfo(
-                name="stream_id",
-                param_type=ToolParamType.STRING,
-                description="目标聊天流 ID（与 group_id/user_id 三选一，提供时直接发送到该流，如其他用户的流）",
-                required=False,
-            ),
-            ToolParameterInfo(
-                name="group_id",
-                param_type=ToolParamType.STRING,
-                description="目标群 ID（与 user_id 二选一）",
-                required=False,
-            ),
-            ToolParameterInfo(
-                name="user_id",
-                param_type=ToolParamType.STRING,
-                description="目标用户 ID（与 group_id 二选一）",
-                required=False,
-            ),
-            ToolParameterInfo(
-                name="platform",
-                param_type=ToolParamType.STRING,
-                description="平台标识（可选，默认 qq）",
-                required=False,
-            ),
-            ToolParameterInfo(
-                name="relay_from",
-                param_type=ToolParamType.STRING,
-                description="转达委托人姓名/昵称（可选）。转达他人之言时必填，润色会点名委托人；不传视为本人发言",
-                required=False,
-            ),
-        ],
+        parameters=_send_message_params(),
     )
     async def _tool_send_message(self, **kwargs: Any) -> dict[str, Any]:
         return await self._get_planner_tool("send_message")(**kwargs)

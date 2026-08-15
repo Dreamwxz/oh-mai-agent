@@ -42,7 +42,7 @@ def handlers(
     default_config: MaibotAgentConfig,
 ) -> dict[str, Any]:
     """name → handler 描述符 字典。"""
-    built = build_api_handlers(manager, default_resolver, default_config)
+    built = build_api_handlers(manager)
     return {h["name"]: h for h in built}
 
 

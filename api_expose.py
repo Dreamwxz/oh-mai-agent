@@ -14,14 +14,18 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from typing import Any
 
-from .config import MaibotAgentConfig
-from .permission import PermissionResolver, Role
 from .core.task_manager import TaskManager
 from .domain.task_record import TaskRecord, TaskStatus
+from .permission import Role
 
 logger = logging.getLogger(__name__)
+
+# 跨插件 API 调用视为可信：处理器统一以 ADMIN 角色调用 TaskManager，
+# 避免面向用户的内部权限校验阻碍合法的跨插件操作。
+_CALLER_ROLE = Role.ADMIN
 
 
 def _to_int(val: Any, default: int = 0) -> int:
@@ -42,11 +46,48 @@ def _parse_status(status_str: str | None) -> TaskStatus | None:
         return None
 
 
-def build_api_handlers(
-    task_manager: TaskManager,
-    resolver: PermissionResolver,
-    config: MaibotAgentConfig,
-) -> list[dict[str, Any]]:
+def _wrap_handler(
+    name: str,
+    *,
+    extract: Callable[[dict[str, Any]], dict[str, Any]],
+    call: Callable[[dict[str, Any]], Awaitable[tuple[bool, Any]]],
+    map_ok: Callable[[Any], dict[str, Any]],
+    map_err: Callable[[Any], dict[str, Any]] | None = None,
+) -> Callable[..., Awaitable[dict[str, Any]]]:
+    """构建统一结构的 API handler：提取参数 → 调用 → 结果映射 → 异常兜底。
+
+    - 成功：``map_ok(result)``；
+    - ``call`` 返回 ``(False, msg)``：用 ``map_err(msg)``
+      （缺省 ``{"success": False, "error": str(msg)}``）；
+    - 任何异常：``{"success": False, "error": str(exc)}``，不向上抛。
+
+    Args:
+        name: 端点名（日志用）。
+        extract: ``(kwargs) -> 调用参数字典``，含类型转换与调用日志。
+        call: ``(args) -> (ok, result)``，调用 TaskManager 方法。
+        map_ok: ``(result) -> dict``，成功结果映射。
+        map_err: ``(msg) -> dict``，业务失败映射（缺省 error 字段）。
+    """
+
+    async def handler(**kwargs: Any) -> dict[str, Any]:
+        try:
+            args = extract(kwargs)
+            ok, result = await call(args)
+            if ok:
+                logger.info("跨插件 API %s 成功", name)
+                return map_ok(result)
+            logger.warning("跨插件 API %s 失败：%.80r", name, str(result))
+            if map_err is not None:
+                return map_err(result)
+            return {"success": False, "error": str(result)}
+        except Exception as exc:
+            logger.exception("跨插件 API %s 调用异常：%.80r", name, str(exc))
+            return {"success": False, "error": str(exc)}
+
+    return handler
+
+
+def build_api_handlers(task_manager: TaskManager) -> list[dict[str, Any]]:
     """构建跨插件 API 处理器描述符列表。
 
     返回字典列表，每个字典描述一个公开 API 端点，
@@ -62,304 +103,212 @@ def build_api_handlers(
     所有处理器成功时返回 ``{"success": True, ...}``。
     失败时返回 ``{"success": False, ...}``：cancel/inject 的失败信息经
     TaskManager 的 ``(bool, str)`` 返回，落在 ``message`` 字段；其余端点及
-    所有异常路径落在 ``error`` 字段。
-
-    跨插件 API 调用内部按 ADMIN 级别处理。
-    注意：当前未做等级门控 — 全部端点硬编码 ``public=True``。
+    所有异常路径落在 ``error`` 字段。跨插件 API 调用内部按 ADMIN 级别处理。
 
     Args:
         task_manager: TaskManager 实例，用于任务操作。
-        resolver: 权限解析器（保留；内部未使用 — 当前实现不做等级门控）。
-        config: 完整插件配置（当前实现未读取 ``api_expose.max_level``；
-            该配置键声明但未强制执行）。
 
     Returns:
         API 处理器描述符列表。
     """
-    # 跨插件 API 调用视为可信：处理器统一以 ADMIN 角色调用 TaskManager，
-    # 避免面向用户的内部权限校验阻碍合法的跨插件操作。
-    _caller_role = Role.ADMIN
-
     # ── create ──────────────────────────────────────────────────────────
-    async def _create(**kwargs: Any) -> dict[str, Any]:
-        """创建新任务。
+    def _create_extract(kwargs: dict[str, Any]) -> dict[str, Any]:
+        """创建新任务（不接受 level 参数——跨插件创建固定为 agent 级）。"""
+        intent = str(kwargs.get("intent", ""))
+        owner = str(kwargs.get("owner", ""))
+        platform = str(kwargs.get("platform", ""))
+        stream_id = str(kwargs.get("stream_id", ""))
+        delay_seconds: int | None = _to_int(kwargs.get("delay_seconds")) or None
+        cron_expr: str | None = kwargs.get("cron_expr")
+        priority: int = _to_int(kwargs.get("priority", 0))
+        reply_stream_id: str | None = kwargs.get("reply_stream_id")
+        logger.debug(
+            "跨插件 API create 调用：owner=%s、platform=%s、stream_id=%s、intent=%.80r",
+            owner, platform, stream_id, intent,
+        )
+        return {
+            "intent": intent, "owner": owner, "platform": platform,
+            "stream_id": stream_id, "delay_seconds": delay_seconds,
+            "cron_expr": cron_expr, "priority": priority,
+            "reply_stream_id": reply_stream_id,
+        }
 
-        期望 kwargs：
-            intent (str): 任务意图描述。
-            owner (str): 任务所有者（必须由调用方提供）。
-            platform (str): 平台标识符。
-            stream_id (str): 目标聊天流 ID。
-            delay_seconds (int, 可选): 执行前延迟的秒数。
-            cron_expr (str, 可选): 定时任务 cron 表达式。
-            priority (int, 可选): 任务优先级（数值越高越紧急）。
-            reply_stream_id (str, 可选): 回复目标聊天流 ID
-                （缺省时回复到 stream_id 指定的流）。
+    async def _create_call(args: dict[str, Any]) -> tuple[bool, Any]:
+        return await task_manager.create_task(
+            intent=args["intent"], owner=args["owner"], platform=args["platform"],
+            stream_id=args["stream_id"], delay_seconds=args["delay_seconds"],
+            cron_expr=args["cron_expr"], priority=args["priority"],
+            reply_stream_id=args["reply_stream_id"], caller_role=_CALLER_ROLE,
+        )
 
-        注意：本端点不接受 ``level`` 参数——INSTANT 仅由定时任务与
-        Agent 模型显式创建，跨插件 API 创建的任务固定为 agent 级。
-        """
-        try:
-            intent = str(kwargs.get("intent", ""))
-            owner = str(kwargs.get("owner", ""))
-            platform = str(kwargs.get("platform", ""))
-            stream_id = str(kwargs.get("stream_id", ""))
-            delay_seconds: int | None = _to_int(kwargs.get("delay_seconds")) or None
-            cron_expr: str | None = kwargs.get("cron_expr")
-            priority: int = _to_int(kwargs.get("priority", 0))
-            reply_stream_id: str | None = kwargs.get("reply_stream_id")
-
-            logger.debug(
-                "跨插件 API create 调用：owner=%s、platform=%s、stream_id=%s、intent=%.80r",
-                owner,
-                platform,
-                stream_id,
-                intent,
-            )
-
-            ok, result = await task_manager.create_task(
-                intent=intent,
-                owner=owner,
-                platform=platform,
-                stream_id=stream_id,
-                delay_seconds=delay_seconds,
-                cron_expr=cron_expr,
-                priority=priority,
-                reply_stream_id=reply_stream_id,
-                caller_role=_caller_role,
-            )
-            if ok and isinstance(result, TaskRecord):
-                logger.info(
-                    "跨插件 API create 成功：任务 %s 已创建（level=%s）",
-                    result.id,
-                    result.level.value,
-                )
-                return {
-                    "success": True,
-                    "task_id": result.id,
-                    "title": result.title,
-                    "level": result.level.value,
-                }
-            logger.warning("跨插件 API create 失败：%.80r", str(result))
-            return {"success": False, "error": str(result)}
-        except Exception as exc:
-            logger.exception("跨插件 API create 调用异常：%.80r", str(exc))
-            return {"success": False, "error": str(exc)}
+    def _create_map_ok(result: TaskRecord) -> dict[str, Any]:
+        return {"success": True, "task_id": result.id, "title": result.title,
+                "level": result.level.value}
 
     # ── list ────────────────────────────────────────────────────────────
-    async def _list(**kwargs: Any) -> dict[str, Any]:
-        """列出任务摘要。
+    def _list_extract(kwargs: dict[str, Any]) -> dict[str, Any]:
+        owner = str(kwargs.get("owner", ""))
+        status_str: str | None = kwargs.get("status")
+        limit: int = _to_int(kwargs.get("limit", 50)) or 50
+        logger.debug(
+            "跨插件 API list 调用：owner=%s、status=%s、limit=%d",
+            owner, status_str, limit,
+        )
+        return {"owner": owner, "status_str": status_str, "limit": limit}
 
-        期望 kwargs：
-            owner (str): 按任务所有者筛选。
-            status (str, 可选): 按任务状态筛选。
-            limit (int, 可选): 最大结果数（默认 50）。
-        """
-        try:
-            owner = str(kwargs.get("owner", ""))
-            status_str: str | None = kwargs.get("status")
-            limit: int = _to_int(kwargs.get("limit", 50)) or 50
+    async def _list_call(args: dict[str, Any]) -> tuple[bool, Any]:
+        status_str = args["status_str"]
+        status = _parse_status(status_str)
+        if status_str and status is None:
+            return False, f"无效状态: {status_str}"
+        return True, await task_manager.list_tasks(
+            caller_role=_CALLER_ROLE, owner=args["owner"], status=status,
+            limit=args["limit"],
+        )
 
-            logger.debug(
-                "跨插件 API list 调用：owner=%s、status=%s、limit=%d",
-                owner,
-                status_str,
-                limit,
-            )
-            status = _parse_status(status_str)
-            if status_str and status is None:
-                logger.warning("跨插件 API list 参数校验失败：无效状态 %s", status_str)
-                return {"success": False, "error": f"无效状态: {status_str}"}
-
-            tasks = await task_manager.list_tasks(
-                caller_role=_caller_role,
-                owner=owner,
-                status=status,
-                limit=limit,
-            )
-            logger.info(
-                "跨插件 API list 成功：共 %d 个任务（owner=%s、status=%s）",
-                len(tasks),
-                owner,
-                status_str,
-            )
-            return {"success": True, "tasks": tasks, "count": len(tasks)}
-        except Exception as exc:
-            logger.exception("跨插件 API list 调用异常：%.80r", str(exc))
-            return {"success": False, "error": str(exc)}
+    def _list_map_ok(result: list) -> dict[str, Any]:
+        return {"success": True, "tasks": result, "count": len(result)}
 
     # ── get ─────────────────────────────────────────────────────────────
-    async def _get(**kwargs: Any) -> dict[str, Any]:
-        """获取单个任务的完整详情。
+    def _get_extract(kwargs: dict[str, Any]) -> dict[str, Any]:
+        task_id = str(kwargs.get("task_id", ""))
+        owner = str(kwargs.get("owner", ""))
+        logger.debug("跨插件 API get 调用：task_id=%s、owner=%s", task_id, owner)
+        return {"task_id": task_id, "owner": owner}
 
-        期望 kwargs：
-            task_id (str): 任务 ID。
-            owner (str): 调用方 owner ID，用于权限检查。
-        """
-        try:
-            task_id = str(kwargs.get("task_id", ""))
-            owner = str(kwargs.get("owner", ""))
+    async def _get_call(args: dict[str, Any]) -> tuple[bool, Any]:
+        return await task_manager.get_task(
+            task_id=args["task_id"], caller_role=_CALLER_ROLE, owner=args["owner"],
+        )
 
-            logger.debug("跨插件 API get 调用：task_id=%s、owner=%s", task_id, owner)
-            ok, result = await task_manager.get_task(
-                task_id=task_id,
-                caller_role=_caller_role,
-                owner=owner,
-            )
-            if ok and isinstance(result, TaskRecord):
-                logger.info("跨插件 API get 成功：任务 %s 详情已返回", task_id)
-                return {"success": True, "task": result.to_dict()}
-            logger.warning("跨插件 API get 失败：任务 %s：%.80r", task_id, str(result))
-            return {"success": False, "error": str(result)}
-        except Exception as exc:
-            logger.exception("跨插件 API get 调用异常：%.80r", str(exc))
-            return {"success": False, "error": str(exc)}
+    def _get_map_ok(result: TaskRecord) -> dict[str, Any]:
+        return {"success": True, "task": result.to_dict()}
 
     # ── cancel ──────────────────────────────────────────────────────────
-    async def _cancel(**kwargs: Any) -> dict[str, Any]:
-        """取消任务。
+    def _cancel_extract(kwargs: dict[str, Any]) -> dict[str, Any]:
+        task_id = str(kwargs.get("task_id", ""))
+        owner = str(kwargs.get("owner", ""))
+        logger.debug("跨插件 API cancel 调用：task_id=%s、owner=%s", task_id, owner)
+        return {"task_id": task_id, "owner": owner}
 
-        期望 kwargs：
-            task_id (str): 任务 ID。
-            owner (str): 调用方 owner ID，用于权限检查。
-        """
-        try:
-            task_id = str(kwargs.get("task_id", ""))
-            owner = str(kwargs.get("owner", ""))
+    async def _cancel_call(args: dict[str, Any]) -> tuple[bool, Any]:
+        return await task_manager.cancel_task(
+            task_id=args["task_id"], caller_role=_CALLER_ROLE, owner=args["owner"],
+        )
 
-            logger.debug("跨插件 API cancel 调用：task_id=%s、owner=%s", task_id, owner)
-            ok, msg = await task_manager.cancel_task(
-                task_id=task_id,
-                caller_role=_caller_role,
-                owner=owner,
-            )
-            if ok:
-                logger.info("跨插件 API cancel 成功：任务 %s 已取消", task_id)
-            else:
-                logger.warning("跨插件 API cancel 失败：任务 %s：%.80r", task_id, str(msg))
-            return {"success": ok, "message": msg}
-        except Exception as exc:
-            logger.exception("跨插件 API cancel 调用异常：%.80r", str(exc))
-            return {"success": False, "error": str(exc)}
+    def _cancel_map_ok(result: str) -> dict[str, Any]:
+        return {"success": True, "message": result}
 
     # ── inject ──────────────────────────────────────────────────────────
-    async def _inject(**kwargs: Any) -> dict[str, Any]:
-        """向运行中任务注入指令。
+    def _inject_extract(kwargs: dict[str, Any]) -> dict[str, Any]:
+        task_id = str(kwargs.get("task_id", ""))
+        instruction = str(kwargs.get("instruction", ""))
+        owner = str(kwargs.get("owner", ""))
+        logger.debug(
+            "跨插件 API inject 调用：task_id=%s、owner=%s、instruction=%.80r",
+            task_id, owner, instruction,
+        )
+        return {"task_id": task_id, "owner": owner, "instruction": instruction}
 
-        期望 kwargs：
-            task_id (str): 目标任务 ID。
-            instruction (str): 要注入的指令文本。
-            owner (str): 调用方 owner ID，用于权限检查。
-        """
-        try:
-            task_id = str(kwargs.get("task_id", ""))
-            instruction = str(kwargs.get("instruction", ""))
-            owner = str(kwargs.get("owner", ""))
+    async def _inject_call(args: dict[str, Any]) -> tuple[bool, Any]:
+        return await task_manager.modify_task(
+            task_id=args["task_id"], caller_role=_CALLER_ROLE, owner=args["owner"],
+            inject_instruction=args["instruction"],
+        )
 
-            logger.debug(
-                "跨插件 API inject 调用：task_id=%s、owner=%s、instruction=%.80r",
-                task_id,
-                owner,
-                instruction,
-            )
-            ok, msg = await task_manager.modify_task(
-                task_id=task_id,
-                caller_role=_caller_role,
-                owner=owner,
-                inject_instruction=instruction,
-            )
-            if ok:
-                logger.info("跨插件 API inject 成功：任务 %s 指令已注入", task_id)
-            else:
-                logger.warning("跨插件 API inject 失败：任务 %s：%.80r", task_id, str(msg))
-            return {"success": ok, "message": msg}
-        except Exception as exc:
-            logger.exception("跨插件 API inject 调用异常：%.80r", str(exc))
-            return {"success": False, "error": str(exc)}
+    def _inject_map_ok(result: str) -> dict[str, Any]:
+        return {"success": True, "message": result}
 
     # ── history ─────────────────────────────────────────────────────────
-    async def _history(**kwargs: Any) -> dict[str, Any]:
-        """获取任务执行历史。
+    def _history_extract(kwargs: dict[str, Any]) -> dict[str, Any]:
+        task_id = str(kwargs.get("task_id", ""))
+        owner = str(kwargs.get("owner", ""))
+        limit: int = _to_int(kwargs.get("limit", 50)) or 50
+        logger.debug(
+            "跨插件 API history 调用：task_id=%s、owner=%s、limit=%d",
+            task_id, owner, limit,
+        )
+        return {"task_id": task_id, "owner": owner, "limit": limit}
 
-        期望 kwargs：
-            task_id (str): 任务 ID。
-            owner (str): 调用方 owner ID，用于权限检查。
-            limit (int, 可选): 最大历史条目数（默认 50）。
-        """
-        try:
-            task_id = str(kwargs.get("task_id", ""))
-            owner = str(kwargs.get("owner", ""))
-            limit: int = _to_int(kwargs.get("limit", 50)) or 50
+    async def _history_call(args: dict[str, Any]) -> tuple[bool, Any]:
+        return await task_manager.task_history(
+            task_id=args["task_id"], caller_role=_CALLER_ROLE, owner=args["owner"],
+            limit=args["limit"],
+        )
 
-            logger.debug(
-                "跨插件 API history 调用：task_id=%s、owner=%s、limit=%d",
-                task_id,
-                owner,
-                limit,
-            )
-            ok, result = await task_manager.task_history(
-                task_id=task_id,
-                caller_role=_caller_role,
-                owner=owner,
-                limit=limit,
-            )
-            if ok:
-                logger.info(
-                    "跨插件 API history 成功：任务 %s 历史已返回（%d 条）",
-                    task_id,
-                    len(result),
-                )
-                return {"success": True, "history": result}
-            logger.warning("跨插件 API history 失败：任务 %s：%.80r", task_id, str(result))
-            return {"success": False, "error": str(result)}
-        except Exception as exc:
-            logger.exception("跨插件 API history 调用异常：%.80r", str(exc))
-            return {"success": False, "error": str(exc)}
+    def _history_map_ok(result: list) -> dict[str, Any]:
+        return {"success": True, "history": result}
 
-    logger.info(
-        "构建跨插件 API 处理器完成，共 %d 个端点：create/list/get/cancel/inject/history",
-        6,
+    # ── 端点描述表 ─────────────────────────────────────────────────────
+    # cancel/inject 的业务失败沿用 TaskManager 的 (bool, str) 语义，落在 message 字段
+    _message_err: Callable[[Any], dict[str, Any]] = (
+        lambda msg: {"success": False, "message": str(msg)}
     )
-    return [
+    endpoints = [
         {
             "name": "create",
             "description": "创建任务",
-            "version": "1",
-            "public": True,
-            "handler": _create,
+            "extract": _create_extract,
+            "call": _create_call,
+            "map_ok": _create_map_ok,
         },
         {
             "name": "list",
             "description": "列出任务摘要",
-            "version": "1",
-            "public": True,
-            "handler": _list,
+            "extract": _list_extract,
+            "call": _list_call,
+            "map_ok": _list_map_ok,
         },
         {
             "name": "get",
             "description": "查看任务详情",
-            "version": "1",
-            "public": True,
-            "handler": _get,
+            "extract": _get_extract,
+            "call": _get_call,
+            "map_ok": _get_map_ok,
         },
         {
             "name": "cancel",
             "description": "取消任务",
-            "version": "1",
-            "public": True,
-            "handler": _cancel,
+            "extract": _cancel_extract,
+            "call": _cancel_call,
+            "map_ok": _cancel_map_ok,
+            "map_err": _message_err,
         },
         {
             "name": "inject",
             "description": "向运行中任务注入指令",
-            "version": "1",
-            "public": True,
-            "handler": _inject,
+            "extract": _inject_extract,
+            "call": _inject_call,
+            "map_ok": _inject_map_ok,
+            "map_err": _message_err,
         },
         {
             "name": "history",
             "description": "查看任务执行历史",
+            "extract": _history_extract,
+            "call": _history_call,
+            "map_ok": _history_map_ok,
+        },
+    ]
+
+    logger.info(
+        "构建跨插件 API 处理器完成，共 %d 个端点：%s",
+        len(endpoints),
+        "/".join(e["name"] for e in endpoints),
+    )
+    return [
+        {
+            "name": e["name"],
+            "description": e["description"],
             "version": "1",
             "public": True,
-            "handler": _history,
-        },
+            "handler": _wrap_handler(
+                e["name"],
+                extract=e["extract"],
+                call=e["call"],
+                map_ok=e["map_ok"],
+                map_err=e.get("map_err"),
+            ),
+        }
+        for e in endpoints
     ]

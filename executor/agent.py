@@ -39,7 +39,7 @@ class AgentExecutor:
         *,
         registry: Any,
         on_ask: Callable[[str, str], Any] | None = None,
-    send_final: Callable[[TaskRecord, str], Any] | None = None,
+        send_final: Callable[[TaskRecord, str], Any] | None = None,
         prompt_manager: Any | None = None,
         prompt_service: Any | None = None,
         command_bus: Any | None = None,
@@ -62,6 +62,10 @@ class AgentExecutor:
         self._prompt_manager = prompt_manager
         self._prompt_service = prompt_service
         self._command_bus = command_bus
+        self._resolver = resolver
+
+    def update_resolver(self, resolver: Any) -> None:
+        """Replace the permission resolver used by the agent executor."""
         self._resolver = resolver
 
     async def execute(self, ctx: ExecutionContext, task: TaskRecord) -> ExecutionResult:

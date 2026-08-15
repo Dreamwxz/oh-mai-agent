@@ -65,22 +65,12 @@ async def load_plugin(plugin: "MaibotAgentPlugin") -> None:
     plugin._command_bus = TaskCommandBus()
     logger.info("TaskCommandBus 初始化完成")
 
-    # 3. 初始化 TaskScheduler（executor 闭包打破 TaskManager 循环依赖）
-    plugin._executor_ref: dict[str, Any] = {}
-
-    async def _scheduler_executor(task_obj: TaskRecord) -> None:
-        """调度器 executor — 按任务级别分发执行。"""
-        tm = plugin._executor_ref["tm"]
-        if task_obj.level == TaskLevel.INSTANT:
-            await tm.execute_instant(task_obj)
-        else:
-            executor = tm._build_agent_loop(task_obj)
-            await executor(task_obj)
-
+    # 3. 初始化 TaskScheduler（executor 后绑定打破 TaskManager 构造环：
+    #    TaskManager 需要 scheduler，scheduler 需要 TaskManager 的执行回调，
+    #    先构造 scheduler，TaskManager 就绪后 set_executor 注入）
     plugin._scheduler = TaskScheduler(
         config=plugin.config.task,
         store=plugin._store,
-        executor=_scheduler_executor,
         command_bus=plugin._command_bus,
     )
 
@@ -116,14 +106,15 @@ async def load_plugin(plugin: "MaibotAgentPlugin") -> None:
         command_bus=plugin._command_bus,
         sender=plugin._sender,
     )
-    plugin._executor_ref["tm"] = plugin._task_manager
+    # 注入调度器执行回调（TaskManager 就绪后，start() 之前）
+    plugin._scheduler.set_executor(plugin._task_manager.execute_task)
     await plugin._task_manager.setup()
     logger.info(
         "TaskManager 初始化完成 (%d 个工具已注册)",
         len(plugin._registry.all_names()),
     )
 
-    # 6. 启动调度器（此时 executor_ref 已指向 TaskManager，派发的任务可安全执行）
+    # 6. 启动调度器（执行回调已绑定，派发的任务可安全执行）
     await plugin._scheduler.start()
 
     # 7. 恢复活跃任务
@@ -148,7 +139,7 @@ async def load_plugin(plugin: "MaibotAgentPlugin") -> None:
     logger.info("PlannerBoard 初始化完成")
 
     # 10. 注册跨插件动态 API
-    handlers = build_api_handlers(plugin._task_manager, plugin._resolver, plugin.config)
+    handlers = build_api_handlers(plugin._task_manager)
     for h in handlers:
         plugin.register_dynamic_api(
             name=h["name"],

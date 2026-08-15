@@ -69,7 +69,7 @@ class AgentLoop:
         on_ask: Callable[[str, str], Awaitable[None]] | None = None,
         max_rounds: int = 30,
         role_provider: Callable[[], Role] | None = None,
-    send_final: Callable[[TaskRecord, str], Awaitable[None]] | None = None,
+        send_final: Callable[[TaskRecord, str], Awaitable[None]] | None = None,
         prompt_manager: PromptManager | None = None,
         prompt_service: Any | None = None,
         command_bus: Any,

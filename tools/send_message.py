@@ -31,6 +31,47 @@ from .registry import ToolDefinition
 
 logger = logging.getLogger(__name__)
 
+# ── send_message 工具的单一 schema 来源 ────────────────────────────────────
+# Agent 循环版（build_send_tool 的 ToolDefinition）与 Planner 版（plugin.py 的
+# @Tool）共享同一份描述与参数规范，避免两份手写 schema 漂移。
+
+SEND_MESSAGE_DESCRIPTION = (
+    "向好友/群发送消息（自动创建聊天流、默认润色与长文本分割）。"
+    "参数: text（消息文本,必填）+ 目标三选一: stream_id（目标聊天流 ID）"
+    "或 group_id 或 user_id（不能同时提供多个）"
+    "+ platform（可选,默认 qq）。"
+    "若不知道目标的 user_id/group_id，先调用 search_users 按昵称搜索获取。"
+    "转达他人之言必须传 relay_from（委托人姓名/昵称）并点明委托人，禁止编造转达内容、"
+    "禁止冒充本人发言；不传 relay_from 视为本人发言。"
+)
+
+SEND_MESSAGE_PARAMS: list[dict[str, Any]] = [
+    {"name": "text", "type": "string", "description": "要发送的消息文本", "required": True},
+    {"name": "stream_id", "type": "string",
+     "description": "目标聊天流 ID（与 group_id/user_id 三选一，提供时直接发送到该流）"},
+    {"name": "group_id", "type": "string", "description": "目标群 ID（与 user_id 二选一）"},
+    {"name": "user_id", "type": "string", "description": "目标用户 ID（与 group_id 二选一）"},
+    {"name": "platform", "type": "string", "description": "平台标识（可选，默认 qq）",
+     "default": "qq"},
+    {"name": "relay_from", "type": "string",
+     "description": "转达委托人姓名/昵称（可选）。转达他人之言时必填，润色会点名委托人；不传视为本人发言"},
+]
+
+
+def params_to_json_schema(params: list[dict[str, Any]]) -> dict:
+    """将参数规范转换为 LLM function-calling 的 JSON Schema（ToolDefinition 用）。"""
+    properties: dict[str, Any] = {}
+    for p in params:
+        prop: dict[str, Any] = {"type": p["type"], "description": p["description"]}
+        if "default" in p:
+            prop["default"] = p["default"]
+        properties[p["name"]] = prop
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": [p["name"] for p in params if p.get("required")],
+    }
+
 
 async def _send_to_stream(
     ctx: object,
@@ -268,52 +309,10 @@ def build_send_tool(
             relay_from=kwargs.get("relay_from") or None,
         )
 
-    description = (
-        "向好友/群发送消息（自动创建聊天流、默认润色与长文本分割）。"
-        "参数: text（消息文本,必填）+ 目标三选一: stream_id（目标聊天流 ID）"
-        "或 group_id 或 user_id（不能同时提供多个）"
-        "+ platform（可选,默认 qq）。"
-        "若不知道目标的 user_id/group_id，先调用 search_users 按昵称搜索获取。"
-        "转达他人之言必须传 relay_from（委托人姓名/昵称）并点明委托人，禁止编造转达内容、"
-        "禁止冒充本人发言；不传 relay_from 视为本人发言。"
-    )
-
-    parameters: dict = {
-        "type": "object",
-        "properties": {
-            "text": {
-                "type": "string",
-                "description": "要发送的消息文本（必填）",
-            },
-            "stream_id": {
-                "type": "string",
-                "description": "目标聊天流 ID（与 group_id/user_id 三选一，提供时直接发送到该流）",
-            },
-            "group_id": {
-                "type": "string",
-                "description": "目标群 ID（与 user_id 二选一）",
-            },
-            "user_id": {
-                "type": "string",
-                "description": "目标用户 ID（与 group_id 二选一）",
-            },
-            "platform": {
-                "type": "string",
-                "description": "平台标识（可选，默认 qq）",
-                "default": "qq",
-            },
-            "relay_from": {
-                "type": "string",
-                "description": "转达委托人姓名/昵称（可选）。转达他人之言时必填，润色会点名委托人；不传视为本人发言",
-            },
-        },
-        "required": ["text"],
-    }
-
     return ToolDefinition(
         name="send_message",
-        description=description,
-        parameters=parameters,
+        description=SEND_MESSAGE_DESCRIPTION,
+        parameters=params_to_json_schema(SEND_MESSAGE_PARAMS),
         handler=_handler,
         visibility="discoverable",
         min_role=min_role,

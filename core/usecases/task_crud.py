@@ -48,6 +48,10 @@ class TaskCrud:
         """Replace the configuration used by CRUD operations."""
         self._config = config
 
+    def update_resolver(self, resolver: PermissionResolver) -> None:
+        """Replace the permission resolver used by CRUD operations."""
+        self._resolver = resolver
+
     async def create_task(
         self,
         *,

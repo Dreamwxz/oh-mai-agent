@@ -292,9 +292,9 @@ class TaskManager:
     def update_resolver(self, resolver: PermissionResolver) -> None:
         """Replace the permission resolver used by task orchestration."""
         self._resolver = resolver
-        self._crud._resolver = resolver
+        self._crud.update_resolver(resolver)
         agent_executor = self._executor_factory.get(TaskLevel.AGENT)
-        agent_executor._resolver = resolver
+        agent_executor.update_resolver(resolver)
 
     # ── 创建 ──────────────────────────────────────────────────────────
 
@@ -402,6 +402,17 @@ class TaskManager:
 
     async def execute_instant(self, task: TaskRecord) -> None:
         return await self._control.execute_instant(task)
+
+    async def execute_task(self, task: TaskRecord) -> None:
+        """按任务级别分发执行（调度器 executor 回调）。
+
+        - INSTANT：经 TaskControl 同步执行（进程内润色 + 发送）；
+        - AGENT：构造 AgentLoop 执行器并运行。
+        """
+        if task.level == TaskLevel.INSTANT:
+            await self.execute_instant(task)
+        else:
+            await self._build_agent_loop(task)(task)
 
     # ── 历史 ──────────────────────────────────────────────────────────
 

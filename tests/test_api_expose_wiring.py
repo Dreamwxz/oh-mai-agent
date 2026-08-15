@@ -70,7 +70,7 @@ class TestOnLoadRegistersDynamicApis:
             task=TaskConfig(),
             permission=PermissionConfig(),
         )
-        handlers = build_api_handlers(plugin._task_manager, plugin._resolver, cfg)
+        handlers = build_api_handlers(plugin._task_manager)
         for h in handlers:
             plugin.register_dynamic_api(
                 name=h["name"],
@@ -103,7 +103,7 @@ class TestOnLoadRegistersDynamicApis:
             task=TaskConfig(),
             permission=PermissionConfig(),
         )
-        handlers = build_api_handlers(plugin._task_manager, plugin._resolver, cfg)
+        handlers = build_api_handlers(plugin._task_manager)
         for h in handlers:
             assert h["public"] is True, f"{h['name']} should be public=True"
             assert callable(h["handler"]), f"{h['name']} handler is not callable"
@@ -123,7 +123,7 @@ class TestApiCreateReplyStreamId:
             task=TaskConfig(),
             permission=PermissionConfig(),
         )
-        handlers = build_api_handlers(plugin._task_manager, plugin._resolver, cfg)
+        handlers = build_api_handlers(plugin._task_manager)
         return next(h["handler"] for h in handlers if h["name"] == "create")
 
     @pytest.mark.asyncio
