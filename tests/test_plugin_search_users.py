@@ -104,6 +104,41 @@ class TestToolSearchUsersMultiSource:
         assert result["persons"] == []
 
     @pytest.mark.asyncio
+    async def test_keywords_param_or_semantics(
+        self, plugin_with_ctx: MaibotAgentPlugin, plugin_ctx: MockCtx,
+    ) -> None:
+        """keywords 数组取 OR 语义：任一关键词命中即返回该流。"""
+        plugin_ctx._chat_streams = [
+            _make_stream(0, user_nickname="低调的空格"),
+            _make_stream(1, user_nickname="小泽"),
+        ]
+
+        with patch.object(type(plugin_with_ctx), "config", new_callable=PropertyMock) as mock_cfg:
+            mock_cfg.return_value = MaibotAgentConfig()
+            result = await plugin_with_ctx._tool_search_users(keywords=["低调空格", "小泽"])
+
+        assert result["success"] is True
+        assert result["count"] == 2
+        assert {r["user_nickname"] for r in result["streams"]} == {"低调的空格", "小泽"}
+
+    @pytest.mark.asyncio
+    async def test_keyword_particle_fallback(
+        self, plugin_with_ctx: MaibotAgentPlugin, plugin_ctx: MockCtx,
+    ) -> None:
+        """缺虚词的关键词（'低调空格'）分词容错命中昵称 '低调的空格' 的流。"""
+        plugin_ctx._chat_streams = [
+            _make_stream(0, user_nickname="低调的空格", chat_type="private"),
+        ]
+
+        with patch.object(type(plugin_with_ctx), "config", new_callable=PropertyMock) as mock_cfg:
+            mock_cfg.return_value = MaibotAgentConfig()
+            result = await plugin_with_ctx._tool_search_users(keyword="低调空格")
+
+        assert result["success"] is True
+        assert result["count"] == 1
+        assert result["streams"][0]["user_nickname"] == "低调的空格"
+
+    @pytest.mark.asyncio
     async def test_keyword_not_found_anywhere(
         self, plugin_with_ctx: MaibotAgentPlugin, plugin_ctx: MockCtx,
     ) -> None:

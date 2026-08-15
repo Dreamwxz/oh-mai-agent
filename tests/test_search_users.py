@@ -143,6 +143,61 @@ class TestFilterStreams:
         result = _filter_streams(streams, max_results=0)
         assert result == []
 
+    # ── 多关键词（keywords，OR 语义）与分词容错 ──────────────────────────
+
+    def test_keywords_or_semantics(self) -> None:
+        """给定 keywords 列表，任一关键词命中即保留该流（OR 语义）。"""
+        streams = [
+            _make_stream(0, user_nickname="Alice"),
+            _make_stream(1, user_nickname="Bob"),
+            _make_stream(2, user_nickname="Charlie"),
+        ]
+        result = _filter_streams(streams, keywords=["Alice", "Charlie"])
+        assert len(result) == 2
+        assert {r["user_nickname"] for r in result} == {"Alice", "Charlie"}
+
+    def test_keyword_and_keywords_merged(self) -> None:
+        """给定 keyword 与 keywords 同时传入，合并后取 OR 语义。"""
+        streams = [
+            _make_stream(0, user_nickname="Alice"),
+            _make_stream(1, user_nickname="Bob"),
+            _make_stream(2, user_nickname="Charlie"),
+        ]
+        result = _filter_streams(streams, keyword="Bob", keywords=["Charlie"])
+        assert len(result) == 2
+
+    def test_particle_stripping_fallback(self) -> None:
+        """给定关键词含虚词差异（'低调空格' vs '低调的空格'），分词容错后命中。"""
+        streams = [_make_stream(0, user_nickname="低调的空格")]
+        result = _filter_streams(streams, keyword="低调空格")
+        assert len(result) == 1
+        assert result[0]["user_nickname"] == "低调的空格"
+
+    def test_particle_stripping_fallback_in_keyword(self) -> None:
+        """给定候选名含虚词而关键词不含时，同样分词容错命中（'小泽和空格' vs '小泽空格'）。"""
+        streams = [_make_stream(0, user_nickname="小泽和空格")]
+        result = _filter_streams(streams, keyword="小泽空格")
+        assert len(result) == 1
+
+    def test_particle_stripping_no_false_positive(self) -> None:
+        """给定关键词与候选实际不匹配时，分词容错不应产生误命中。"""
+        streams = [
+            _make_stream(0, user_nickname="高调行事"),
+            _make_stream(1, user_nickname="低调奢华"),
+        ]
+        result = _filter_streams(streams, keyword="低调空格")
+        assert result == []
+
+    def test_keywords_combined_with_chat_type(self) -> None:
+        """给定 keywords 与 chat_type 同时传入，两个过滤条件都生效。"""
+        streams = [
+            _make_stream(0, chat_type="group", user_nickname="低调的空格"),
+            _make_stream(1, chat_type="private", user_nickname="低调的空格"),
+        ]
+        result = _filter_streams(streams, keywords=["低调空格"], chat_type="private")
+        assert len(result) == 1
+        assert result[0]["chat_type"] == "private"
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 集成测试：经 MockCtx 验证 build_info_tools 的 search_users handler
@@ -330,6 +385,40 @@ class TestBuildInfoToolsSearchUsersMultiSource:
         assert result["count"] == 0
         assert result["persons"] == []
         assert result["streams"] == []
+
+    def test_keywords_param_or_and_dedupe(self) -> None:
+        """给定 keywords 数组，流 OR 命中；人物/记忆线索跨关键词去重。"""
+        ctx = MockCtx()
+        ctx._chat_streams = [
+            _make_stream(0, user_nickname="低调的空格"),
+            _make_stream(1, user_nickname="小泽"),
+        ]
+        ctx._person_data["空格"] = "person-a8da8a94"
+        ctx._person_data["低调空格"] = "person-a8da8a94"  # 同一人，两个名字都解析到同一 pid
+        tools = build_info_tools(ctx, search_max_results=20)
+        tool = self._find_tool(tools, "search_users")
+
+        result = asyncio.run(tool.handler(keywords=["低调空格", "小泽"]))
+        assert result["success"] is True
+        assert result["count"] == 2
+        assert {r["user_nickname"] for r in result["streams"]} == {"低调的空格", "小泽"}
+        # 两个关键词解析到同一 person_id → 只保留一条
+        assert len(result["persons"]) == 1
+        assert result["persons"][0]["person_id"] == "person-a8da8a94"
+
+    def test_keyword_particle_fallback_hits_stream(self) -> None:
+        """给定缺虚词的关键词（'低调空格'），分词容错命中昵称 '低调的空格' 的流。"""
+        ctx = MockCtx()
+        ctx._chat_streams = [
+            _make_stream(0, user_nickname="低调的空格", chat_type="private"),
+        ]
+        tools = build_info_tools(ctx, search_max_results=20)
+        tool = self._find_tool(tools, "search_users")
+
+        result = asyncio.run(tool.handler(keyword="低调空格"))
+        assert result["success"] is True
+        assert result["count"] == 1
+        assert result["streams"][0]["user_nickname"] == "低调的空格"
 
     def test_keyword_not_found_anywhere_returns_empty(self) -> None:
         """给定关键词无任何匹配，三张列表均为空，count 为 0。"""
