@@ -1,4 +1,10 @@
-"""Agent 循环的合成发现工具通道。
+"""Agent 循环的合成发现工具通道（legacy fallback）。
+
+> **legacy fallback 标注**：Discoverable 层工具已由 Agent 循环**直接全量
+> 暴露**（每轮全部进 ``tools`` 参数，见 AGENTS.md"两级工具模型"），
+> ``list_tools`` / ``get_tool_schema`` 合成发现工具降级为兜底——仅在 LLM
+> 需要确认工具存在/参数时作为补充通道，不再承担"按需发现"的主要职责。
+> 本模块保留仅为兼容旧行为，新功能不依赖它。
 
 提供 ``list_tools`` 和 ``get_tool_schema`` 两个合成工具
 的 LLM schema 定义与 handler 实现，供 ``executor/agent_loop.py``

@@ -42,9 +42,17 @@ class PromptBuilder(ABC):
     """
 
     def __init__(self, pm: PromptManager | None = None) -> None:
-        # _pm 由 PromptService 注册时注入（构造为 None 的实例会被自动回填）；
-        # 仍未注入时 build() 抛 RuntimeError。
+        # _pm 由 PromptService 注册时经 attach_manager 注入（构造为 None 的
+        # 实例会被自动回填）；仍未注入时 build() 抛 RuntimeError。
         self._pm: PromptManager | None = pm
+
+    def attach_manager(self, manager: PromptManager) -> None:
+        """绑定 PromptManager 引用（供 PromptService 注册时回填）。
+
+        Builder 与 manager 的关联是组合装配的一部分，经公开方法写入
+        而非跨模块直改私有字段；未绑定时 ``build()`` 抛 RuntimeError。
+        """
+        self._pm = manager
 
     @property
     @abstractmethod

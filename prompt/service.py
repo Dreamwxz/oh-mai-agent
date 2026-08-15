@@ -35,7 +35,7 @@ class PromptService:
         for b in (builders or []):
             # _pm 注入：构造时为 None 的实例自动回填 manager，共享同一渲染入口
             if b._pm is None and manager is not None:
-                b._pm = manager
+                b.attach_manager(manager)
             self._builders[b.name] = b
         logger.info(
             "PromptService 初始化完成：注册 %d 个 builder（%s）",

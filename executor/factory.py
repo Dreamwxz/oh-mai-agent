@@ -85,5 +85,5 @@ class ExecutorFactory:
         except KeyError:
             logger.error("未知任务等级 %s，未注册对应执行器", level)
             raise
-        logger.info("任务等级 %s 选择执行器 %s", level, type(executor).__name__)
+        logger.debug("任务等级 %s 选择执行器 %s", level, type(executor).__name__)
         return executor

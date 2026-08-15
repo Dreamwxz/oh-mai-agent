@@ -89,9 +89,9 @@ class MCPManager:
         config: 来自 ``config.MCPConfig`` 的 MCP 配置。
         timeout_ms: 每次请求超时时间（毫秒），默认 30000。
         startup_timeout_s: ``start()`` 整体启动超时上限（秒），默认
-            ``_STARTUP_TIMEOUT_S``（15 秒）；超时关闭未完成握手的连接并跳过剩余服务器。
+            ``_STARTUP_TIMEOUT_S``（25 秒）；超时关闭未完成握手的连接并跳过剩余服务器。
         per_server_timeout_s: 单个服务器的启动预算（秒），默认
-            ``_PER_SERVER_STARTUP_TIMEOUT_S``（5 秒）；connect + initialize +
+            ``_PER_SERVER_STARTUP_TIMEOUT_S``（15 秒）；connect + initialize +
             list_tools 受其约束，超时的服务器被跳过。
     """
 
@@ -115,7 +115,7 @@ class MCPManager:
     async def start(self) -> None:
         """连接所有启用的服务器，完成 initialize 握手，并收集工具列表。
 
-        整体启动受 ``startup_timeout_s`` 上限约束（默认 15 秒）：超时时
+        整体启动受 ``startup_timeout_s`` 上限约束（默认 25 秒）：超时时
         关闭未完成握手的连接并保留已初始化的连接，不向上抛异常。连接或
         初始化失败的服务器会被关闭并跳过（失败日志由 ``MCPConnection`` 内部
         记录），manager 不会因此崩溃；工具列表获取失败时按空列表处理，
