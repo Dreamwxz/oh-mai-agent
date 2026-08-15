@@ -144,8 +144,9 @@ async def _send_message_core(
     send_polished: Callable[..., Awaitable[None]],
     prompt_service: Any | None,
     relay_from: str | None = None,
+    chat_id: str = "",
 ) -> dict[str, Any]:
-    """send_message 共享核心：参数校验 → 建流/直发 → 润色+发送 → 上下文记录。
+    """send_message 共享核心：宿主上下文剥离 → 参数校验 → 建流/直发 → 润色+发送 → 上下文记录。
 
     *stream_id* 提供时直接发送到该聊天流（如其他用户的流，跳过建流）；
     否则 ``group_id`` / ``user_id`` 二选一，经 open_session 建流后发送。
@@ -163,10 +164,56 @@ async def _send_message_core(
         prompt_service: PromptService 实例（可选）。提供后 XML 上下文注释
             通过 builder 生成，否则跳过 XML 记录。
         relay_from: 转达委托人（可选）。非空 = 转达他人之言，润色点名委托人。
+        chat_id: 宿主注入的当前会话流 ID（MaiBot Host 专用字段，工具 schema
+            无此参数，LLM 永不传）。Host 调用工具时会把当前会话上下文注入
+            kwargs（stream_id/chat_id/group_id/user_id/platform，且仅当 LLM
+            未提供该键时注入），见 MaiBot ``component_query._build_tool_context_payload``。
+            宿主注入的 stream_id 恒等于 chat_id，据此剥离宿主上下文，避免
+            「目标流」与「当前会话流」同名冲突（LLM 传 group_id 时宿主补
+            stream_id、传 stream_id 时宿主补 group_id/user_id 的误报）。
 
     Returns:
         ``{"success": bool, ...}`` 结构的结果字典。
     """
+    # ── 宿主上下文剥离 ──────────────────────────────────────────────
+    # chat_id 是宿主注入指纹：schema 无此参数，LLM 永不传；宿主注入的
+    # stream_id 恒等于 chat_id。剥离后 stream_id/group_id/user_id 只保留
+    # LLM 显式目标，与「当前会话上下文」解耦。
+    if chat_id:
+        if stream_id == chat_id:
+            logger.debug("send_message 剥离宿主注入 stream_id=%s", stream_id)
+            stream_id = ""
+        # 反查当前会话流（chat_id）的 group_id/user_id，剥离宿主注入值
+        host_group = host_user = ""
+        try:
+            streams = await ctx.chat.get_all_streams(platform=platform)
+            for s in streams:
+                sid = (
+                    str(s.get("stream_id") or s.get("session_id") or "")
+                    if isinstance(s, dict)
+                    else str(getattr(s, "stream_id", None) or getattr(s, "session_id", None) or "")
+                )
+                if sid == chat_id:
+                    host_group = (
+                        str(s.get("group_id") or "")
+                        if isinstance(s, dict)
+                        else str(getattr(s, "group_id", None) or "")
+                    )
+                    host_user = (
+                        str(s.get("user_id") or "")
+                        if isinstance(s, dict)
+                        else str(getattr(s, "user_id", None) or "")
+                    )
+                    break
+        except Exception:
+            logger.debug("send_message 反查宿主上下文失败（回退不剥离）", exc_info=True)
+        if host_group and group_id == host_group:
+            logger.debug("send_message 剥离宿主注入 group_id=%s", group_id)
+            group_id = ""
+        if host_user and user_id == host_user:
+            logger.debug("send_message 剥离宿主注入 user_id=%s", user_id)
+            user_id = ""
+
     # ── 参数校验 ──────────────────────────────────────────────────────
     if not text:
         logger.warning("send_message 参数校验失败: 缺少 text（消息文本）")
@@ -307,6 +354,7 @@ def build_send_tool(
             send_polished=send_polished,
             prompt_service=prompt_service,
             relay_from=kwargs.get("relay_from") or None,
+            chat_id=str(kwargs.get("chat_id", "")).strip(),
         )
 
     return ToolDefinition(
@@ -350,6 +398,7 @@ def build_send_message_handler(ctx: Any, sender: Any) -> Callable[..., Awaitable
             send_polished=_send_polished,
             prompt_service=sender.prompt_service,
             relay_from=kwargs.get("relay_from") or None,
+            chat_id=str(kwargs.get("chat_id", "")).strip(),
         )
 
     return handler

@@ -371,3 +371,161 @@ class TestToolSendMessageAccountIdScope:
 
         assert len(plugin_ctx.chat._stream_lookup_calls) == 0
         assert len(plugin_ctx.chat._open_session_calls) == 1
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# _tool_send_message — MaiBot Host 注入的会话上下文剥离
+# ═══════════════════════════════════════════════════════════════════════════════
+# MaiBot Host 调用插件工具时会把当前会话上下文注入 kwargs（stream_id/chat_id/
+# group_id/user_id/platform，见 Host component_query._build_tool_context_payload），
+# 且仅当 LLM 未提供该键时注入。chat_id 是宿主专用字段（schema 无此参数，
+# LLM 永不传），且宿主注入的 stream_id 恒等于 chat_id —— 这是剥离的指纹。
+
+
+class TestHostContextStripping:
+    @pytest.mark.asyncio
+    async def test_injected_stream_id_does_not_conflict_with_group_id(
+        self, plugin_with_ctx: MaibotAgentPlugin, plugin_ctx: MockCtx,
+    ) -> None:
+        """LLM 传 group_id，宿主注入 stream_id=chat_id（当前会话）→ 剥离后走 group_id 建流。"""
+        async def _noop(*args: Any, **kwargs: Any) -> None:
+            pass
+
+        with (
+            patch.object(plugin_with_ctx._task_manager.sender, "send_polished", _noop),
+            patch.object(type(plugin_with_ctx), "config", new_callable=PropertyMock) as mock_cfg,
+        ):
+            mock_cfg.return_value = MaibotAgentConfig()
+            result = await plugin_with_ctx._tool_send_message(
+                text="小泽请你吃KFC疯狂星期四 [QQ表情:307]",
+                group_id="1093236363",
+                stream_id="fb7e79aac500da7bfa4745a2edad8851",  # 宿主注入（== chat_id）
+                chat_id="fb7e79aac500da7bfa4745a2edad8851",
+                platform="qq",
+            )
+
+        assert result["success"] is True, f"result={result}"
+        assert result["stream_id"] == "qq:g:1093236363"
+        assert len(plugin_ctx.chat._open_session_calls) == 1
+        assert plugin_ctx.chat._open_session_calls[0]["group_id"] == "1093236363"
+
+    @pytest.mark.asyncio
+    async def test_llm_stream_id_beats_injected_group_id(
+        self, plugin_with_ctx: MaibotAgentPlugin, plugin_ctx: MockCtx,
+    ) -> None:
+        """LLM 显式传 stream_id（≠chat_id），宿主注入 group_id（当前会话群）→ 直发 stream_id。"""
+        plugin_ctx._chat_streams = [{
+            "stream_id": "current-session",
+            "group_id": "1093236363",
+            "account_id": "3948827829",
+            "scope": "",
+            "is_group_session": True,
+            "chat_type": "group",
+        }]
+
+        async def _noop(*args: Any, **kwargs: Any) -> None:
+            pass
+
+        with (
+            patch.object(plugin_with_ctx._task_manager.sender, "send_polished", _noop),
+            patch.object(type(plugin_with_ctx), "config", new_callable=PropertyMock) as mock_cfg,
+        ):
+            mock_cfg.return_value = MaibotAgentConfig()
+            result = await plugin_with_ctx._tool_send_message(
+                text="你好",
+                stream_id="target-stream-id",
+                group_id="1093236363",  # 宿主注入（当前会话群，与 LLM 的 stream_id 冲突）
+                chat_id="current-session",
+                platform="qq",
+            )
+
+        assert result["success"] is True, f"result={result}"
+        # 直发 LLM 指定的目标流，不建流
+        assert result["stream_id"] == "target-stream-id"
+        assert result["created"] is False
+        assert len(plugin_ctx.chat._open_session_calls) == 0
+
+    @pytest.mark.asyncio
+    async def test_injected_user_id_does_not_conflict_with_group_id(
+        self, plugin_with_ctx: MaibotAgentPlugin, plugin_ctx: MockCtx,
+    ) -> None:
+        """LLM 传 group_id，宿主注入 user_id（当前会话用户）→ 反查剥离 user_id 后走 group_id。"""
+        plugin_ctx._chat_streams = [{
+            "stream_id": "current-session",
+            "user_id": "10001",
+            "account_id": "3948827829",
+            "scope": "",
+            "is_group_session": False,
+            "chat_type": "private",
+        }]
+
+        async def _noop(*args: Any, **kwargs: Any) -> None:
+            pass
+
+        with (
+            patch.object(plugin_with_ctx._task_manager.sender, "send_polished", _noop),
+            patch.object(type(plugin_with_ctx), "config", new_callable=PropertyMock) as mock_cfg,
+        ):
+            mock_cfg.return_value = MaibotAgentConfig()
+            result = await plugin_with_ctx._tool_send_message(
+                text="你好",
+                group_id="1093236363",
+                user_id="10001",  # 宿主注入（当前会话用户，与 LLM 的 group_id 冲突）
+                stream_id="current-session",  # 宿主注入（== chat_id）
+                chat_id="current-session",
+                platform="qq",
+            )
+
+        assert result["success"] is True, f"result={result}"
+        assert result["stream_id"] == "qq:g:1093236363"
+        assert len(plugin_ctx.chat._open_session_calls) == 1
+        assert plugin_ctx.chat._open_session_calls[0]["group_id"] == "1093236363"
+
+    @pytest.mark.asyncio
+    async def test_chat_id_absent_keeps_strict_validation(
+        self, plugin_with_ctx: MaibotAgentPlugin, plugin_ctx: MockCtx,
+    ) -> None:
+        """无 chat_id（Agent 循环直调，无宿主注入）时保留原有严格校验。"""
+        async def _noop(*args: Any, **kwargs: Any) -> None:
+            pass
+
+        with (
+            patch.object(plugin_with_ctx._task_manager.sender, "send_polished", _noop),
+            patch.object(type(plugin_with_ctx), "config", new_callable=PropertyMock) as mock_cfg,
+        ):
+            mock_cfg.return_value = MaibotAgentConfig()
+            result = await plugin_with_ctx._tool_send_message(
+                text="你好",
+                group_id="1093236363",
+                stream_id="some-stream",  # 无 chat_id：不是宿主注入，是 LLM 传错了 → 报错
+            )
+
+        assert result["success"] is False
+        assert "只能提供其一" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_injected_user_id_without_stream_match_keeps_group_id(
+        self, plugin_with_ctx: MaibotAgentPlugin, plugin_ctx: MockCtx,
+    ) -> None:
+        """宿主注入 user_id 但 chat_id 流不在 get_all_streams 中 → 反查失败不剥离，保持 group_id。"""
+        plugin_ctx._chat_streams = []  # 反查无匹配
+
+        async def _noop(*args: Any, **kwargs: Any) -> None:
+            pass
+
+        with (
+            patch.object(plugin_with_ctx._task_manager.sender, "send_polished", _noop),
+            patch.object(type(plugin_with_ctx), "config", new_callable=PropertyMock) as mock_cfg,
+        ):
+            mock_cfg.return_value = MaibotAgentConfig()
+            result = await plugin_with_ctx._tool_send_message(
+                text="你好",
+                group_id="1093236363",
+                stream_id="current-session",  # == chat_id → 宿主注入，剥离
+                chat_id="current-session",
+                platform="qq",
+            )
+
+        # stream_id（==chat_id）被剥离，group_id 保留 → 成功走群发
+        assert result["success"] is True, f"result={result}"
+        assert result["stream_id"] == "qq:g:1093236363"

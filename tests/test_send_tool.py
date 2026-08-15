@@ -172,6 +172,43 @@ class TestSendMessageValidation:
         assert len(polish_calls) == 0
 
     @pytest.mark.asyncio
+    async def test_stream_and_group_still_conflicts_without_chat_id(self) -> None:
+        """无 chat_id（无宿主注入）时，stream_id 与 group_id 并存仍报错。"""
+        ctx = MockCtx()
+        polish_calls: list[dict] = []
+
+        async def _record_polish(text: str, stream_id: str, **kwargs: Any) -> None:
+            polish_calls.append({})
+
+        tool = build_send_tool(ctx, send_polished=_record_polish)
+        result = await tool.handler(text="Hello", stream_id="s1", group_id="12345")
+
+        assert result["success"] is False
+        assert "只能提供其一" in result["error"]
+        assert len(polish_calls) == 0
+
+    @pytest.mark.asyncio
+    async def test_host_injected_stream_id_stripped(self) -> None:
+        """宿主注入 stream_id=chat_id 与 LLM 的 group_id 并存 → 剥离后走 group_id。"""
+        ctx = MockCtx()
+        polish_calls: list[dict] = []
+
+        async def _record_polish(text: str, stream_id: str, **kwargs: Any) -> None:
+            polish_calls.append({"text": text, "stream_id": stream_id})
+
+        tool = build_send_tool(ctx, send_polished=_record_polish)
+        result = await tool.handler(
+            text="Hello",
+            group_id="12345",
+            stream_id="current-session",  # 宿主注入（== chat_id）
+            chat_id="current-session",
+        )
+
+        assert result["success"] is True, f"result={result}"
+        assert result["stream_id"] == "qq:g:12345"
+        assert polish_calls[0]["stream_id"] == "qq:g:12345"
+
+    @pytest.mark.asyncio
     async def test_missing_text_returns_error(self) -> None:
         """text 为空时，handler 返回 success=False。"""
         ctx = MockCtx()
