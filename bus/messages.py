@@ -1,12 +1,15 @@
-"""任务命令与事件消息类型 — 总线消息契约。
+"""任务命令消息类型 — 总线消息契约。
 
 仅定义进程内消息的纯数据 dataclass（无序列化方法、无传输层）。
-命令按 ``task_id`` 精准投递到运行中的 AgentLoop；事件广播给事件监听者
-（当前唯一监听者：``TaskScheduler``，用于释放并发额度）。
+命令按 ``task_id`` 精准投递到运行中的 AgentLoop。
 
 > 架构变更：v0.1.0 曾尝试跨进程传输（WorkerManager + StdioTransport），
 > 后因复杂度与收益不匹配回退到进程内方案，字节帧序列化 / ``decode_frame`` /
-> ``Transport`` 协议已一并移除。当前全部消息在 Runner 进程内以类型化对象传递。
+> ``Transport`` 协议已一并移除。任务完成通知随后也统一为执行器直调
+> ``scheduler.on_task_completed``（时序可预期），事件通道
+> （``TaskEvent`` / ``EventKind`` / ``publish`` / ``listen_events``）
+> 失去生产者与消费者，已删除——当前全部消息在 Runner 进程内以类型化
+> 命令对象传递。
 """
 
 from __future__ import annotations
@@ -34,20 +37,6 @@ class CommandKind(str, Enum):
     RESUME = "resume"
 
 
-class EventKind(str, Enum):
-    """运行中任务向调度器广播的状态变更事件。
-
-    每种枚举值对应一个生命周期节点，均用于调度器释放并发额度：
-    - COMPLETED：任务正常完成
-    - FAILED：任务执行失败
-    - CANCELLED：任务已取消
-    """
-
-    COMPLETED = "completed"
-    FAILED = "failed"
-    CANCELLED = "cancelled"
-
-
 @dataclass(slots=True)
 class TaskCommand:
     """针对特定任务的控制命令。
@@ -60,16 +49,4 @@ class TaskCommand:
 
     task_id: str
     kind: CommandKind
-    payload: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(slots=True)
-class TaskEvent:
-    """运行中任务向外广播的生命周期事件。
-
-    由 AgentLoop 发出，通知调度器释放并发额度。
-    """
-
-    task_id: str
-    kind: EventKind
     payload: dict[str, Any] = field(default_factory=dict)

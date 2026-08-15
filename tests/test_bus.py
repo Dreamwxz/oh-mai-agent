@@ -1,25 +1,23 @@
-"""oh_mai_agent.bus 的测试——命令路由、事件队列、订阅生命周期与韧性。
+"""oh_mai_agent.bus 的测试——命令路由、订阅生命周期与韧性。
 
 v0.1.0 跨进程方案回退后，总线不再有字节帧序列化 / Transport / decode_frame，
 因此不再测试线协议，只测试进程内真正有价值的行为：
 - 命令按 task_id 精准投递（同步分发）；
-- 事件经内部队列 fan-out（fire-and-forget，不按路由表分发）；
 - 订阅生命周期（subscribe / unsubscribe）；
 - 处理器异常韧性（log-and-continue，不得杀死调度基础设施）。
+
+> 事件通道（publish / listen_events / TaskEvent）已随「完成通知统一为
+> 直接调用」删除，相关测试一并移除。
 """
 
 from __future__ import annotations
-
-import asyncio
 
 import pytest
 
 from oh_mai_agent.bus import (
     CommandKind,
-    EventKind,
     TaskCommand,
     TaskCommandBus,
-    TaskEvent,
 )
 
 
@@ -77,46 +75,6 @@ class TestTaskCommandBusSend:
         assert hits == ["h1", "h2"]
 
 
-class TestTaskCommandBusPublish:
-    """事件不按路由表分发；经内部事件队列由 listen_events 消费。"""
-
-    @pytest.mark.asyncio
-    async def test_publish_does_not_dispatch_to_subscribers(
-        self, bus: TaskCommandBus,
-    ) -> None:
-        called = False
-
-        async def handler(cmd: TaskCommand) -> None:
-            nonlocal called
-            called = True
-
-        bus.subscribe("t1", handler)
-        await bus.publish(TaskEvent(task_id="t1", kind=EventKind.COMPLETED))
-        assert not called
-
-    @pytest.mark.asyncio
-    async def test_listen_events_receives_published_event(
-        self, bus: TaskCommandBus,
-    ) -> None:
-        received: list[TaskEvent] = []
-
-        async def handler(event: TaskEvent) -> None:
-            received.append(event)
-
-        listener = asyncio.create_task(bus.listen_events(handler))
-        await bus.publish(TaskEvent(task_id="t1", kind=EventKind.COMPLETED))
-        await bus.publish(TaskEvent(task_id="t2", kind=EventKind.FAILED))
-        await asyncio.sleep(0.05)
-        listener.cancel()
-        try:
-            await listener
-        except asyncio.CancelledError:
-            pass
-
-        assert [e.task_id for e in received] == ["t1", "t2"]
-        assert [e.kind for e in received] == [EventKind.COMPLETED, EventKind.FAILED]
-
-
 class TestTaskCommandBusHelpers:
     @pytest.mark.asyncio
     async def test_unsubscribe_removes_handlers(
@@ -135,8 +93,8 @@ class TestTaskCommandBusHelpers:
 
 
 class TestBusHandlerResilience:
-    """bus 分发必须 log-and-continue：send / listen_events
-    不得因单个处理器异常而终止（否则调度器检查循环 / 事件监听
+    """bus 分发必须 log-and-continue：send
+    不得因单个处理器异常而终止（否则调度器检查循环
     永久死亡 → 并发额度泄漏 → 任务全部排队）。"""
 
     @pytest.mark.asyncio
@@ -168,30 +126,3 @@ class TestBusHandlerResilience:
         bus.subscribe("t", bad)
         ok = await bus.send(TaskCommand(task_id="t", kind=CommandKind.CANCEL))
         assert ok
-
-    @pytest.mark.asyncio
-    async def test_listen_events_survives_handler_error(
-        self, bus: TaskCommandBus,
-    ) -> None:
-        received: list[TaskEvent] = []
-        raised = False
-
-        async def flaky(event: TaskEvent) -> None:
-            nonlocal raised
-            if not raised:
-                raised = True
-                raise RuntimeError("first event boom")
-            received.append(event)
-
-        listener = asyncio.create_task(bus.listen_events(flaky))
-        await bus.publish(TaskEvent(task_id="t1", kind=EventKind.COMPLETED))
-        await bus.publish(TaskEvent(task_id="t2", kind=EventKind.COMPLETED))
-        await asyncio.sleep(0.05)
-        listener.cancel()
-        try:
-            await listener
-        except asyncio.CancelledError:
-            pass
-
-        # 第一个事件触发异常，第二个事件仍被处理 → 监听循环未死
-        assert [e.task_id for e in received] == ["t2"]
