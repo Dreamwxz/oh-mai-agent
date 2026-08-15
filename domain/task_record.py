@@ -385,12 +385,16 @@ class TaskRecord:
         return bool(self.metadata.get(META_COOP_PAUSED, False))
 
     def mark_paused_by_stop(self) -> None:
-        """标记任务在插件关闭时被暂停（恢复机制仅记录，不自动处理）。"""
+        """标记任务在插件关闭时被暂停（恢复机制读取后自动清除，见 recovery）。"""
         self.metadata[META_PAUSED_BY_STOP] = True
 
     def was_paused_by_stop(self) -> bool:
         """是否因插件关闭而被暂停。"""
         return bool(self.metadata.get(META_PAUSED_BY_STOP, False))
+
+    def clear_paused_by_stop(self) -> None:
+        """清除因插件关闭而被暂停的标记（恢复机制重新入队后调用）。"""
+        self.metadata.pop(META_PAUSED_BY_STOP, None)
 
     # ── 回复任务标记 ──
 

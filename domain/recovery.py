@@ -19,16 +19,17 @@ class RecoveryAction(str, Enum):
     """调用方在处理恢复后的任务记录时应执行的动作。
 
     每个枚举值对应一种恢复策略：
-    - ENQUEUE：SCHEDULED 状态的任务，调用方重新入队等待定时器触发
-    - PENDING：原 RUNNING 状态的任务，调用方保存记录后重新入队
+    - ENQUEUE：SCHEDULED / PENDING 状态的任务，调用方重新入队等待调度
+    - PENDING：原 RUNNING 或插件关闭时被暂停（paused_by_stop）的任务，
+      调用方保存记录后重新入队
     - WAITING：WAITING_INPUT 状态的任务，调用方仅计数（不做状态变更）
-    - PAUSED：PAUSED 或终态任务，调用方不做任何操作
+    - PAUSED：用户主动暂停或终态任务，调用方不做任何操作
     """
 
-    ENQUEUE = "enqueue"     # SCHEDULED — 调用方重新入队等待定时器触发
-    PENDING = "pending"     # RUNNING — 调用方保存记录后重新入队
+    ENQUEUE = "enqueue"     # SCHEDULED / PENDING — 调用方重新入队等待调度
+    PENDING = "pending"     # RUNNING / paused_by_stop — 调用方保存记录后重新入队
     WAITING = "waiting"     # WAITING_INPUT — 调用方仅计数（不做状态变更）
-    PAUSED = "paused"       # PAUSED / 终态 — 调用方不做任何操作
+    PAUSED = "paused"       # 用户主动 PAUSED / 终态 — 调用方不做任何操作
 
 
 class TaskRecovery:
@@ -45,9 +46,18 @@ class TaskRecovery:
           * RUNNING 状态 → 调用 ``record.force(PENDING, …)``
             （写入审计轨迹并经 ``mark_recovered_from_running()`` 打标记，
             键 ``META_RECOVERED_FROM_RUNNING``）。
+          * 插件关闭时被暂停（``was_paused_by_stop()``）→ 同样降级为
+            PENDING 并清除 ``META_PAUSED_BY_STOP`` 标记（与崩溃遗留的
+            RUNNING 自动重排对称：优雅停机不应当惩罚任务）。
         """
         if record.status == TaskStatus.SCHEDULED:
             logger.debug("任务 %s 恢复动作: SCHEDULED → ENQUEUE（重新入队等待定时器触发）", record.id)
+            return RecoveryAction.ENQUEUE
+
+        if record.status == TaskStatus.PENDING:
+            # 崩溃/停机瞬间已落库但尚未派发的任务：重新入队即可（调度器的
+            # pending 队列是纯内存的，重启后必须回读 DB 中的 PENDING 行）。
+            logger.debug("任务 %s 恢复动作: PENDING → ENQUEUE（重新入队等待调度）", record.id)
             return RecoveryAction.ENQUEUE
 
         if record.status == TaskStatus.RUNNING:
@@ -65,6 +75,18 @@ class TaskRecovery:
             logger.debug("任务 %s 保持 %s（等待用户回复唤醒）", record.id, record.status.value)
             return RecoveryAction.WAITING
 
-        # PAUSED 及其他未预期状态：仅支持手动恢复
+        if record.status == TaskStatus.PAUSED and record.was_paused_by_stop():
+            # 优雅停机（scheduler.stop）时被 force(PAUSED) 的任务：与崩溃遗留
+            # 的 RUNNING 对称，重启后自动降级重排；用户主动暂停（无该标记）不受影响。
+            record.force(
+                TaskStatus.PENDING,
+                actor="recovery",
+                reason="recovered_from_stop_pause",
+            )
+            record.clear_paused_by_stop()
+            logger.debug("任务 %s 已恢复: PAUSED(paused_by_stop) → PENDING（标记已清除）", record.id)
+            return RecoveryAction.PENDING
+
+        # 用户主动暂停及其他未预期状态：仅支持手动恢复
         logger.debug("任务 %s 保持 %s（仅支持手动恢复）", record.id, record.status.value)
         return RecoveryAction.PAUSED

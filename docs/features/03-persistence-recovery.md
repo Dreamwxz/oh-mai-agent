@@ -52,16 +52,18 @@ sqlite 持久化存储与插件重启后的活跃任务恢复。所有任务记�
 
 ### 恢复流程 recover_active_tasks
 
-加载序列（lifecycle.py:43-153）中，恢复发生在调度器启动之后、MCP 初始化之前：`load_plugin` 第 7 步调用 `recover_active_tasks(plugin, logger)`（lifecycle.py:119-120）。这个顺序保证恢复出的任务能立即进入调度队列。
+加载序列（lifecycle.py:43-153）中，恢复发生在调度器启动与 MCP 初始化**之后**：`load_plugin` 第 8 步调用 `recover_active_tasks(plugin, logger)`（lifecycle.py 的 `load_plugin`）。MCP 先注册保证恢复出的 agent 任务首轮即可看到 MCP 工具；随后恢复的任务能立即进入调度队列。
 
-`recover_active_tasks`（lifecycle.py:244-281）先 `store.list_active()` 取全部非终态任务，逐条交给无状态的 `TaskRecovery.recover()`（domain/recovery.py）决策，再按动作执行：
+`recover_active_tasks`（lifecycle.py 的 `recover_active_tasks`）先 `store.list_active()` 取全部非终态任务，逐条交给无状态的 `TaskRecovery.recover()`（domain/recovery.py）决策，再按动作执行：
 
 | 原状态 | 恢复动作 | 调用方行为 |
 |---|---|---|
 | SCHEDULED | ENQUEUE | 直接 `scheduler.enqueue(task)`，等待定时器到点触发（重新入队幂等，不再产生非法状态转换错误日志） |
-| RUNNING | PENDING | 决策器已 `force(PENDING, actor="recovery", reason="recovered_from_running")` 并经 `mark_recovered_from_running()` 打标记（recovery.py:53-61，键 `META_RECOVERED_FROM_RUNNING`）；调用方落盘后重新入队（lifecycle.py:266-270） |
+| PENDING | ENQUEUE | 崩溃/停机瞬间已落库但尚未派发的任务——调度器 pending 队列是纯内存的，重启必须回读 DB 中的 PENDING 行，否则成为永久孤儿（enqueue 已返回 bool，入队失败不再静默） |
+| RUNNING | PENDING | 决策器已 `force(PENDING, actor="recovery", reason="recovered_from_running")` 并经 `mark_recovered_from_running()` 打标记（recovery.py 的 `TaskRecovery.recover`，键 `META_RECOVERED_FROM_RUNNING`）；调用方落盘后重新入队（lifecycle.py 的 `recover_active_tasks`） |
 | WAITING_INPUT | WAITING | 保持状态；旧进程的 resume Event 已随进程消失，等 `chat.receive.after_process` Hook 收到用户回复后，经命令总线 RESUME_REPLY 唤醒 |
-| PAUSED | PAUSED | 不做任何操作，须手动恢复 |
+| PAUSED（paused_by_stop） | PENDING | 优雅停机（`scheduler.stop`）时被 `force(PAUSED)` 的任务带 `META_PAUSED_BY_STOP` 标记：与崩溃遗留的 RUNNING 对称，自动降级 PENDING 重新入队，标记随即清除（用户主动暂停无此标记，不受影响） |
+| PAUSED（用户主动） | PAUSED | 不做任何操作，须手动恢复 |
 
 RUNNING 降级走 `force` 而非 `transition`，因为 RUNNING→PENDING 不在状态机允许表里，重启恢复属于必须绕过校验的兜底场景。`was_recovered_from_running()` 标记用来区分"恢复重排"与"正常排队"。
 
@@ -84,7 +86,7 @@ RUNNING 降级走 `force` 而非 `transition`，因为 RUNNING→PENDING 不在�
 ### 对用户可见的行为
 
 - `/task history <ID>` 展示任务的状态流转审计与执行历史条目。
-- 重启后：SCHEDULED 任务到点照常触发；RUNNING 任务降级重排后重新执行，Agent 上下文经历史回放重建；WAITING_INPUT 任务保持挂起，收到用户回复后继续。
+- 重启后：SCHEDULED / PENDING 任务重新排队，定时任务到点照常触发；RUNNING 任务降级重排后重新执行，Agent 上下文经历史回放重建；优雅停机时被暂停的任务自动恢复；WAITING_INPUT 任务保持挂起，收到用户回复后继续。
 
 ### 已知限制
 

@@ -245,9 +245,12 @@ async def llm_title(plugin: "MaibotAgentPlugin", intent: str) -> str:
 async def recover_active_tasks(plugin: "MaibotAgentPlugin", logger: Any) -> None:
     """恢复插件重启前未完成的活跃任务。
 
-    - SCHEDULED：重新入队等待定时触发。
-    - RUNNING：降级为 PENDING 重新排队（Agent 上下文丢失，续跑重新开始）。
+    - SCHEDULED / PENDING：重新入队等待调度（PENDING 是崩溃/停机瞬间已落库
+      但尚未派发的任务——调度器 pending 队列纯内存，重启必须回读 DB）。
+    - RUNNING / 优雅停机时被暂停（paused_by_stop）：降级为 PENDING 重新排队
+      （Agent 上下文丢失，续跑重新开始）。
     - WAITING_INPUT：保持状态，chat.receive.after_process Hook 收到用户回复时恢复。
+    - 用户主动暂停（PAUSED 无 paused_by_stop 标记）：不处理，须手动恢复。
     """
     from .domain.recovery import RecoveryAction, TaskRecovery
 

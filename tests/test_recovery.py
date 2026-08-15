@@ -126,6 +126,57 @@ class TestRecoveryPausedKept:
         assert r.status == TaskStatus.PAUSED
 
 
+class TestRecoveryPendingEnqueue:
+    """PENDING 任务（崩溃/停机瞬间已落库但未派发）返回 ENQUEUE —— 由调用方重新入队。"""
+
+    def test_returns_enqueue_action(self) -> None:
+        r = _make_record(TaskStatus.PENDING)
+        assert TaskRecovery.recover(r) == RecoveryAction.ENQUEUE
+
+    def test_keeps_pending_status(self) -> None:
+        """给定 PENDING 记录，recover() 不改变状态（调用方入队时再置状态）。"""
+        r = _make_record(TaskStatus.PENDING)
+        TaskRecovery.recover(r)
+        assert r.status == TaskStatus.PENDING
+
+    def test_no_status_log_entries_added(self) -> None:
+        r = _make_record(TaskStatus.PENDING)
+        TaskRecovery.recover(r)
+        assert len(r._status_log) == 0
+
+
+class TestRecoveryPausedByStopAutoResume:
+    """优雅停机时被暂停（paused_by_stop 标记）的任务重启后自动降级重排。"""
+
+    def test_returns_pending_action(self) -> None:
+        r = _make_record(TaskStatus.PAUSED)
+        r.mark_paused_by_stop()
+        assert TaskRecovery.recover(r) == RecoveryAction.PENDING
+
+    def test_downgrades_to_pending_with_audit(self) -> None:
+        r = _make_record(TaskStatus.PAUSED)
+        r.mark_paused_by_stop()
+        TaskRecovery.recover(r)
+        assert r.status == TaskStatus.PENDING
+        assert len(r._status_log) == 1
+        entry: StatusChange = r._status_log[0]
+        assert entry.status == TaskStatus.PENDING
+        assert entry.actor == "recovery"
+        assert entry.reason == "recovered_from_stop_pause"
+
+    def test_clears_paused_by_stop_mark(self) -> None:
+        r = _make_record(TaskStatus.PAUSED)
+        r.mark_paused_by_stop()
+        TaskRecovery.recover(r)
+        assert not r.was_paused_by_stop()
+
+    def test_user_paused_task_untouched(self) -> None:
+        """用户主动暂停（无 paused_by_stop 标记）→ 仍走 PAUSED 分支，须手动恢复。"""
+        r = _make_record(TaskStatus.PAUSED)
+        assert TaskRecovery.recover(r) == RecoveryAction.PAUSED
+        assert r.status == TaskStatus.PAUSED
+
+
 class TestRecoveryEnqueueScheduledNoError:
     """P3 回归：恢复流程对已 SCHEDULED 任务调 enqueue，幂等承接、无 error 噪音。"""
 
