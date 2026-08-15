@@ -142,15 +142,15 @@ on_load → load_plugin()（lifecycle.py:43-153）
 ═══════════════════════════════════════════════════════════════
  1. TaskStore 初始化（sqlite, tasks.db）          lifecycle.py:51-52
  2. ToolRegistry + PermissionResolver             lifecycle.py:56-57
- 2.5 TaskCommandBus（进程内命令路由 + 事件队列）   lifecycle.py:65
+ 2.5 TaskCommandBus（进程内命令路由）             lifecycle.py:65
  3. TaskScheduler（executor 闭包打破循环依赖）     lifecycle.py:81-86
  4. PromptManager + PromptService（7 builders）   lifecycle.py:89-93
  5. TaskManager 构造 + setup()                    lifecycle.py:96-110
     └─ 内部实例化 TaskCrud / TaskControl / ExecutorFactory
  6. scheduler.start()                             lifecycle.py:117
- 7. recover_active_tasks() 恢复活跃任务            lifecycle.py:120
- 8. MCPManager 启动 + 注册 MCP 工具                lifecycle.py:123-128
- 9. PlannerBoard 看板初始化                        lifecycle.py:132-137
+ 7. MCPManager 启动 + 注册 MCP 工具                lifecycle.py:120-126
+ 8. recover_active_tasks() 恢复活跃任务            lifecycle.py:128（MCP 先注册，恢复的 agent 任务首轮即可看到 MCP 工具）
+ 9. PlannerBoard 看板初始化                        lifecycle.py:133-139
 10. 注册 6 个跨插件动态 API                        lifecycle.py:141-150
 ```
 
@@ -162,14 +162,16 @@ on_load → load_plugin()（lifecycle.py:43-153）
 
 ### 恢复机制
 
-`recover_active_tasks()`（`lifecycle.py:244-281`）在加载第 7 步调用，恢复上次运行期间未完成的任务：
+`recover_active_tasks()`（`lifecycle.py` 的 `recover_active_tasks`）在加载第 8 步调用，恢复上次运行期间未完成的任务：
 
 | 原状态 | 恢复动作 |
 |---|---|
 | SCHEDULED | 重新入队等待定时触发 |
+| PENDING | 重新入队（崩溃/停机瞬间已落库但未派发的任务；调度器 pending 队列纯内存，重启必须回读 DB） |
 | RUNNING | 降级为 PENDING 重新排队（Agent 上下文丢失），经 `mark_recovered_from_running()` 打标记（键 `META_RECOVERED_FROM_RUNNING`） |
 | WAITING_INPUT | 保持状态，等待用户回复经 Hook 重新唤醒 |
-| PAUSED / 终态 | 不动 |
+| PAUSED（paused_by_stop） | 自动降级 PENDING 重新入队（优雅停机与崩溃恢复对称），标记清除 |
+| PAUSED（用户主动）/ 终态 | 不动 |
 
 ### 相关文档
 
@@ -280,7 +282,7 @@ Agent 循环完成 / Instant 任务
                 │
                 ▼
 ┌────────────────────────────────────┐
-│ InstantExecutor.execute()          │  instant.py
+│ InstantExecutor.execute()          │  executor/instant.py
 │  ┌──────────────────────────────┐  │
 │  │ ReplySender.send_polished()  │  │  完整出口：信息获取→润色→直发
 │  │  ├─ PolishService.polish()   │  │  仅执行一次，失败回退原文
@@ -297,7 +299,7 @@ Agent 循环完成 / Instant 任务
          │ 异常
          ▼
 ┌────────────────────────────────────┐
-│ fail_task()                        │  instant.py
+│ fail_task()                        │  executor/sender.py
 │  可选: ReplySender.send_raw(失败)   │  直发出口：错误文本不润色
 │  task → FAILED（终态守卫 + force）  │
 └────────────────────────────────────┘
@@ -305,7 +307,7 @@ Agent 循环完成 / Instant 任务
 
 ### 润色与发送
 
-`ReplySender`（`executor/instant.py`）是回复路径的核心，提供两条发送出口与独立上下文注释能力，如实记载四个行为：
+`ReplySender`（`executor/sender.py`）是回复路径的核心，提供两条发送出口与独立上下文注释能力，如实记载四个行为：
 
 1. **两条出口**：`send_raw`（直发：分割 + 重试，无润色，用于命令/失败通知等确定性文本）与 `send_polished`（完整：信息获取 → 润色 → 复用直发发送段，用于任务回复/提问/send_message）；发送出口**不做任何上下文写入**
 2. **润色仅执行一次**：`PolishService.polish()` 拉取聊天记录和黑话表经 LLM 润色，失败时自动回退到原始文本
@@ -317,7 +319,7 @@ Agent 循环完成 / Instant 任务
 ### 完成与失败
 
 - 成功路径：`complete_and_notify()`（`executor/base.py:114-118`）`transition(COMPLETED)`（拒绝时 force 兜底）→ save → `scheduler.on_task_completed()` 释放并发额度。仅 instant 路径使用，agent 在 AgentLoop.run() 内部自管终态
-- 失败路径：`fail_task()`（`executor/instant.py`）可选先经 `ReplySender.send_raw` 直发失败消息（错误文本不润色），再 `transition(FAILED)`（失败回退 force），落盘后通知调度器释放额度
+- 失败路径：`fail_task()`（`executor/sender.py`）可选先经 `ReplySender.send_raw` 直发失败消息（错误文本不润色），再 `transition(FAILED)`（失败回退 force），落盘后通知调度器释放额度
 
 ### 用户回复唤醒
 

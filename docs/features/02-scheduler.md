@@ -54,7 +54,7 @@ enqueue 对已处于 SCHEDULED 的任务幂等：跳过重复 transition（避�
 
 `_try_dispatch()`（`scheduler.py:445`）从 pending 队列按 priority 降序取任务，逐个交给 `_try_start()`（`scheduler.py:394`）。`_try_start` 先检查 `len(_running) >= max_concurrent_tasks`，额度不足则任务留在队列。
 
-这里有一个并发正确性细节：`_try_dispatch` 可能被检查循环、事件监听、enqueue、resume 并发调用，若等 `save` 完成后再登记 running，两个并发派发可同时通过额度检查，导致实际并发数超过上限。因此 `_try_start` 在**第一个 await 之前**同步 `_running.add(task.id)`（`scheduler.py:415`）预留额度；若随后的 `save` 失败，则 `force(PENDING)` 回滚内存状态并返回 False（`scheduler.py:424`），否则任务会因 running→running 非法转换永久卡死队首，阻塞其后全部 pending 任务。
+这里有一个并发正确性细节：`_try_dispatch` 可能被检查循环、enqueue、resume 并发调用，若等 `save` 完成后再登记 running，两个并发派发可同时通过额度检查，导致实际并发数超过上限。因此 `_try_start` 在**第一个 await 之前**同步 `_running.add(task.id)`（`scheduler.py:415`）预留额度；若随后的 `save` 失败，则 `force(PENDING)` 回滚内存状态并返回 False（`scheduler.py:424`），否则任务会因 running→running 非法转换永久卡死队首，阻塞其后全部 pending 任务。
 
 ### 超时兜底：守卫保存 + 协作停止
 
@@ -83,7 +83,7 @@ enqueue 对已处于 SCHEDULED 的任务幂等：跳过重复 transition（避�
 
 ### 停止：RUNNING 降级 PAUSED
 
-`stop()`（`scheduler.py:100`）取消检查循环和事件监听，然后把所有 RUNNING 任务 `force(PAUSED)` 落盘（经 `mark_paused_by_stop()` 打标记，键 `META_PAUSED_BY_STOP`），由恢复机制在下次启动时重新入队。
+`stop()`（`scheduler.py` 的 `TaskScheduler.stop`）取消检查循环，然后把所有 RUNNING 任务 `force(PAUSED)` 落盘（经 `mark_paused_by_stop()` 打标记，键 `META_PAUSED_BY_STOP`）。恢复机制（`domain/recovery.py` 的 `TaskRecovery.recover`）在下次启动时消费该标记：带标记的 PAUSED 任务自动降级 PENDING 重新入队（与崩溃遗留的 RUNNING 对称）；用户主动暂停（无标记）仍须手动恢复。
 
 ---
 
@@ -104,14 +104,14 @@ enqueue 对已处于 SCHEDULED 的任务幂等：跳过重复 transition（避�
 
 ### 与 TaskCrud 的交互
 
-调度器不直接暴露给外部调用方。任务创建经 `TaskCrud.create_task()` 落库后调用 `enqueue()`；取消/暂停/恢复经 `TaskCrud.cancel/pause/resume_task()`（`task_crud.py:215-225`）转发到调度器对应方法。外部入口（命令、API、Planner 工具）一律经 TaskManager 门面，不直接接触调度器。
+调度器不直接暴露给外部调用方。任务创建经 `TaskCrud.create_task()` 落库后调用 `enqueue()`（enqueue 返回 bool——入队失败不再静默，create_task 会向调用方报告）；取消/暂停/恢复经 `TaskControl.cancel/pause/resume_task()`（core/usecases/task_control.py）转发到调度器对应方法。外部入口（命令、API、Planner 工具）一律经 TaskManager 门面，不直接接触调度器。
 
 ### 已知限制
 
 1. **`default_timeout_min` 未由调度器执行**：该配置键声明在 `TaskConfig` 中，但调度器不使用。实际的 ask_user 挂起等待逻辑在 AgentLoop 中通过 `resume_event.wait()` 无超时阻塞实现，超时后任务保持挂起，后续回复仍可唤醒。
 2. **Cron 任务断点丢失**：若插件在 `_check_loop` 刚将 SCHEDULED → PENDING → RUNNING 的过程中崩溃，任务可能丢失（RUNNING 降级为 PENDING 恢复时 Agent 上下文丢失）。没有原子化的调度点推进机制。
-3. **priority 排序无持久化保证**：pending 队列维护在内存中，插件重启后丢失。恢复机制将 RUNNING 降级为 PENDING，但 PENDING 任务不会在恢复中保留原有的队列排序。
-4. **`_do_on_task_completed` 非幂等**：直接回调与事件监听共用同一完成处理，极端情况下可能重复触发 cron 重排。
+3. **priority 排序无持久化保证**：pending 队列维护在内存中，插件重启后丢失。恢复机制会把 DB 中的 PENDING 行重新入队，但队列排序按重启后的入队顺序 + 入队时 priority 重排，不保留崩溃前的内存排序。
+4. **`on_task_completed` 非幂等**：完成回调可能在极端情况下重复触发（如执行器与超时兜底同时收尾），cron 重排依赖 `save(expected_status=COMPLETED)` 守卫原子拒绝重复写入。
 
 ### 相关文档
 

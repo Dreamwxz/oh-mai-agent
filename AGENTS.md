@@ -19,23 +19,23 @@ Essential 层仅 `ask_user`（始终可见）；Discoverable 层按角色过滤�
 11 个 @Tool 安全子集（`tools/planner/` handler 工厂 + `plugin.py` 注册）。
 
 **命令总线与调度链**。任务执行需要跨组件协作（注入指令、唤醒、取消、暂停），故有
-TaskCommandBus（`bus/command_bus.py`，进程内命令路由表 + 事件队列，无传输/序列化层）
+TaskCommandBus（`bus/command_bus.py`，进程内命令路由表，无传输/序列化层）
 路由命令 INJECT_INSTRUCTION / RESUME_REPLY / CANCEL / PAUSE / RESUME（事件
-COMPLETED / FAILED / CANCELLED 已随「完成通知统一为直接调用」退为预留机制，见下）。
+通道 COMPLETED / FAILED / CANCELLED 已随「完成通知统一为直接调用」删除，
+见下）。
 调度链：TaskManager（门面）→ TaskCrud / TaskControl（`core/usecases/`）→ ExecutorFactory
 → InstantExecutor（进程内同步）/ AgentExecutor（AgentLoop 最大 30 轮，经
 `ctx.llm.generate_with_tools(model=planner, timeout_ms=240000)` 调用 LLM）。
 任务进入终态的完成通知**统一走直接调用** `scheduler.on_task_completed`：InstantExecutor
 经 `complete_and_notify` / `fail_task`，AgentExecutor 把 `on_task_done` 回调绑定到
 `ctx.scheduler.on_task_completed` 注入 AgentLoop——同步释放并发额度 + CRON 重排，
-不经过事件总线（时序可预期；`TaskCommandBus.publish / listen_events` 保留为预留
-机制，当前无消费者）。主 Agent 还可经 `ask_subagent` / `ask_subagents` 工具派发进程内子 Agent
+不经过事件总线（时序可预期）。主 Agent 还可经 `ask_subagent` / `ask_subagents` 工具派发进程内子 Agent
 （AgentLoop 合成分支 `_run_subagent` / `_run_subagents` 实例化 `executor/subagent.py` 的
 SubAgentLoop，并行工具轮 + 答案回传主循环继续判断；取消经注入 `lambda: loop.is_cancelled`
 传导，工具层不 import executor）。
 执行期上下文经 `executor/context.py` 的 `current_task` ContextVar 传递（唯一 set 方
 AgentExecutor.execute，finally reset 防并发泄漏），`make_role_provider` 按任务 owner/stream_id
-构造角色回调。回复链路统一走 `executor/instant.py` 的 `ReplySender` 两条出口：
+构造角色回调。回复链路统一走 `executor/sender.py` 的 `ReplySender` 两条出口：
 `send_raw`（直发：分割 + 重试，无润色，命令/失败通知等确定性文本）与
 `send_polished`（完整：信息获取 → PolishService 润色 → 复用直发段，任务回复/提问/
 send_message）；发送出口纯发送（不写 context），跨流动机注释经独立能力
@@ -73,18 +73,22 @@ agent_system / title / polish / planner_board / injection / context_note / subag
 - 根目录单文件模块：`plugin.py`（入口，注册 11 个 @Tool / 7 @Command）、`config.py`（10 节配置）、
   `permission.py`、`api_expose.py`、`planner_hooks.py`、`commands.py`、`lifecycle.py`
   （唯一组装点，load_plugin 编排全部依赖）、`_manifest.json`
-- `bus/`：命令总线，消息类型（`bus/messages.py` 纯 dataclass）+ TaskCommandBus 路由（命令路由表 + 事件队列）
+- `bus/`：命令总线，消息类型（`bus/messages.py` 纯 dataclass）+ TaskCommandBus 命令路由
+  （按 task_id 精准投递；事件通道已随「完成通知统一为直接调用」删除）
 - `core/`：编排层（TaskScheduler / TaskManager 门面 + core/usecases/ 下沉 TaskControl 与
-  TaskCrud）
+  TaskCrud——控制三件套 cancel/pause/resume 在 TaskControl，CRUD 在 TaskCrud）
 - `domain/`：领域模型与持久化，TaskRecord 状态机 + TaskStore + Recovery + StatusFormatter
-- `executor/`：执行层——AgentLoop 执行引擎（agent_loop.py）+ current_task 执行上下文（context.py）+ ExecutorFactory 按级分发 InstantExecutor（进程内）/ AgentExecutor + 工具装配（tool_registrar.py，TaskManager.setup() 委托其注册全部 Agent 工具）
+  + 流/owner 身份值对象（stream_ref.py，`:group:` / `planner:` 语义唯一出处）
+- `executor/`：执行层——AgentLoop 执行引擎（agent_loop.py）+ current_task 执行上下文（context.py）+ 发送基础设施（sender.py，ReplySender / PolishService / fail_task，全插件共用）+ ExecutorFactory 按级分发 InstantExecutor（进程内）/ AgentExecutor + 工具装配（tool_registrar.py，TaskManager.setup() 委托其注册全部 Agent 工具）
 - `tools/mcp/`：MCP 工具提供方，MCPConnection（stdio/http/sse）+ MCPManager + presets（内置 fetch/exa 预设）
 - `prompt/`：提示词系统，manager / service / base + builders/（7）+ templates/（7 中文模板）
 - `tools/`：工具系统三通道（agent 循环工具（含子 Agent 工具 `subagent_tool.py`）/ planner @Tool 工厂 / synthetic 发现工具）+ 发送工具共用实现 `tools/send_message.py` + MCP 工具提供方（tools/mcp/）
-- `tests/`：测试（58 文件，999 测试函数，0 失败）+ 文档引用检查（test_doc_links.py）
+- `tests/`：测试（58 文件，999+ 测试函数，0 失败）+ 文档引用检查（test_doc_links.py）
 - `docs/` + `data/`：功能文档（15 + LIFECYCLE + 4 归档）与运行时数据（gitignored）
 
-> 依赖方向：root（plugin.py/lifecycle.py 组装根）→ core（编排）→ executor（执行）→ {tools, prompt, bus} → domain
+> 依赖方向：root（plugin.py/lifecycle.py 组装根）→ core（编排）→ executor（执行）→ {tools, prompt, bus} → domain。
+> `config.py` / `permission.py` 是**共享叶子层**：虽物理位于根目录，实际被全部层级 import
+> （28 处），自身只依赖 SDK / domain —— 视为与 domain 并列的共享内核，不是组装根的一部分。
 
 ## 相关资源（同级目录）
 
@@ -160,5 +164,6 @@ refactor(domain): remove planner task level and legacy level map
 | `domain/task_record.py` | 无 schema 版本管理，数据模型升级无法自动迁移 | [01-task-model](docs/features/01-task-model.md) |
 | `plugin.py` | 对外 @Tool 名 `task_delete` 与 @Command 名 `task_cancel` 不一致 | [01-task-model](docs/features/01-task-model.md) |
 | `config.py [task]` | `default_timeout_min` 已配置但实际未执行 | [14-config](docs/features/14-config.md) |
+| `config.py [task]` | `persist_history` 已配置但实际未执行（任务历史始终持久化） | [03-persistence-recovery](docs/features/03-persistence-recovery.md) |
 | `tools/mcp/connection.py` | stdio 发送侧固定 newline 帧（适配 MCP SDK <2.0；读取侧双格式兼容）；若宿主切换 mcp SDK 2.0 需适配发送侧，manifest 已 pin `mcp>=1.1.3,<2.0.0` | [08-mcp](docs/features/08-mcp.md) |
 | 代码注释 12 处 | 裸 § 节号引用残留（plugin.py / domain / tools 等文件） | 已知遗留，不修复 |
