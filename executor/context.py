@@ -6,6 +6,7 @@ import logging
 from collections.abc import Callable
 from contextvars import ContextVar
 
+from ..domain.stream_ref import Owner, is_group_stream
 from ..domain.task_record import META_CALLER_ROLE, TaskRecord
 from ..permission import PermissionResolver, Role
 
@@ -38,14 +39,14 @@ def make_role_provider(
         else:
             return lambda: resolved_caller_role
 
-    is_group = ":group:" in task.stream_id
+    is_group = is_group_stream(task.stream_id)
     if is_group:
         # 群聊任务：owner 为 planner:{stream_id}，无单一委托用户。
         # 用占位 user_id，角色判定落到群角色（admin_groups/user_groups）。
         user_id = "planner"
     else:
         # 私聊任务：owner 即委托用户（如 qq:1591625223），提取 user_id。
-        user_id = task.owner.split(":", 1)[1] if ":" in task.owner else task.owner
+        user_id = Owner.user_id(task.owner)
 
     def provider() -> Role:
         return resolver.resolve_role(

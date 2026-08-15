@@ -24,6 +24,7 @@ import logging
 from enum import Enum
 
 from .config import PermissionConfig
+from .domain.stream_ref import group_id_of
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +67,7 @@ class PermissionResolver:
 
     @staticmethod
     def _extract_group_id(stream_id: str) -> str | None:
-        """从聊天流标识符中提取 group_id。
+        """从聊天流标识符中提取 group_id（语义见 ``domain.stream_ref.group_id_of``）。
 
         stream_id 格式：
           - 群聊：  ``"{platform}:group:{group_id}"``
@@ -74,10 +75,7 @@ class PermissionResolver:
 
         如果是群聊流则返回 group_id，否则返回 None。
         """
-        parts = stream_id.split(":", 2)
-        if len(parts) == 3 and parts[1] == "group":
-            return parts[2]
-        return None
+        return group_id_of(stream_id)
 
     @staticmethod
     def require(role: Role, minimum: Role) -> bool:

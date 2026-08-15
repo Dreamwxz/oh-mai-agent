@@ -28,6 +28,7 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from ..domain.stream_ref import is_group_stream
 from ..permission import Role
 from .registry import ToolDefinition
 
@@ -236,12 +237,12 @@ async def _send_message_core(
             "send_message 入口(直发流): stream_id=%s text=%r",
             stream_id, text[:80],
         )
-        # 群聊判定沿用发送器的推导规则（流 ID 含 ":group:" 视为群聊）
+        # 群聊判定沿用发送器的推导规则（domain.stream_ref.is_group_stream）
         return await _send_to_stream(
             ctx,
             text=text,
             stream_id=stream_id,
-            is_group=":group:" in stream_id,
+            is_group=is_group_stream(stream_id),
             send_polished=send_polished,
             prompt_service=prompt_service,
             resolve_relay=resolve_relay,

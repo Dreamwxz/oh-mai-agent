@@ -11,6 +11,7 @@ import logging
 
 from typing import Any, Callable
 
+from ...domain.stream_ref import planner_owner, platform_of
 from ...domain.task_record import TaskLevel, TaskRecord, TaskStatus, TriggerType
 from ...permission import Role
 
@@ -18,14 +19,8 @@ logger = logging.getLogger(__name__)
 
 
 def _planner_owner(stream_id: str) -> str:
-    """Planner 调用的 owner 标识。
-
-    私聊流（无 ``:group:`` 段）→ 委托用户即 owner（如 ``qq:1591625223``）；
-    群聊流（含 ``:group:`` 段）→ ``planner:{stream_id}``（无单一委托用户，保留 Planner 语境）。
-    """
-    if ":group:" in stream_id:
-        return f"planner:{stream_id}"
-    return stream_id
+    """Planner 调用的 owner 标识（见 ``domain.stream_ref.planner_owner``）。"""
+    return planner_owner(stream_id)
 
 
 def _planner_caller_role() -> Role:
@@ -79,7 +74,7 @@ def build_task_tools(task_manager: Any) -> dict[str, Callable[..., Any]]:
             ok, result = await task_manager.create_task(
                 intent=intent,
                 owner=_planner_owner(stream_id),
-                platform=stream_id.split(":", 1)[0] if ":" in stream_id else "",
+                platform=platform_of(stream_id),
                 stream_id=stream_id,
                 level=level,
                 trigger=trigger,
@@ -285,7 +280,7 @@ def build_task_tools(task_manager: Any) -> dict[str, Callable[..., Any]]:
             ok, result = await task_manager.create_task(
                 intent=intent,
                 owner=_planner_owner(stream_id),
-                platform=stream_id.split(":", 1)[0] if ":" in stream_id else "",
+                platform=platform_of(stream_id),
                 stream_id=stream_id,
                 level=level,
                 trigger=TriggerType.CRON,

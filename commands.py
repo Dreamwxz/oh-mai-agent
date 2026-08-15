@@ -11,6 +11,7 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from .domain.status_formatter import StatusFormatter
+from .domain.stream_ref import Owner, is_group_stream, platform_of
 from .domain.task_record import TaskRecord, TaskStatus
 from .permission import PermissionResolver, Role
 
@@ -57,11 +58,11 @@ def resolve_caller(plugin: "MaibotAgentPlugin", **kwargs: Any) -> tuple[Role, st
     platform = str(kwargs.get("platform", ""))
 
     # 从 stream_id 推断 platform
-    if not platform and ":" in stream_id:
-        platform = stream_id.split(":", 1)[0]
+    if not platform:
+        platform = platform_of(stream_id)
 
     # 群聊判定：stream_id 含 ":group:" 段（格式 platform:group:group_id）
-    is_group = ":group:" in stream_id
+    is_group = is_group_stream(stream_id)
 
     role = plugin.resolver.resolve_role(
         platform=platform,
@@ -69,7 +70,7 @@ def resolve_caller(plugin: "MaibotAgentPlugin", **kwargs: Any) -> tuple[Role, st
         stream_id=stream_id,
         is_group=is_group,
     )
-    owner = f"{platform}:{user_id}" if user_id else f"unknown:{stream_id}"
+    owner = Owner.join(platform, user_id) if user_id else f"unknown:{stream_id}"
     return role, owner, stream_id, platform, is_group
 
 
