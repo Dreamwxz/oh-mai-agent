@@ -140,7 +140,7 @@ class TaskScheduler:
 
     # ── 入队 ──────────────────────────────────────────────────────────
 
-    async def enqueue(self, task: TaskRecord) -> None:
+    async def enqueue(self, task: TaskRecord) -> bool:
         """提交任务到调度队列。
 
         - NOW：立即尝试启动（额度满则进入 PENDING 排队）。
@@ -149,6 +149,10 @@ class TaskScheduler:
 
         Args:
             task: 待调度的任务。
+
+        Returns:
+            ``True`` 入队成功；``False`` 失败（已记日志——调用方应感知
+            "任务已落库但未入队"这一状态，不得静默吞掉）。
         """
         now = datetime.now()
 
@@ -174,8 +178,14 @@ class TaskScheduler:
                 )
 
             elif task.trigger_type == TriggerType.CRON:
-                # cron 表达式为空时默认每分钟触发一次
-                expr = task.cron_expr or "* * * * *"
+                expr = task.cron_expr or ""
+                if not expr:
+                    # 空表达式不再静默升级为"每分钟执行"：与无效表达式走同一
+                    # 失败路径，避免定时任务的触发语义偏离用户意图。
+                    logger.error("任务 %s 的 cron 表达式为空，任务标记为 FAILED", task.id)
+                    task.transition(TaskStatus.FAILED)
+                    await self._store.save(task)
+                    return True
                 try:
                     itr = croniter(expr, now)
                     nxt = itr.get_next(datetime)
@@ -183,7 +193,7 @@ class TaskScheduler:
                     logger.error("任务 %s 的 cron 表达式无效: %s", task.id, e)
                     task.transition(TaskStatus.FAILED)
                     await self._store.save(task)
-                    return
+                    return True
                 task.scheduled_at = nxt
                 task.cron_expr = expr
                 self._ensure_status(task, TaskStatus.SCHEDULED)
@@ -197,6 +207,8 @@ class TaskScheduler:
 
         except Exception:
             logger.exception("入队任务 %s 时发生异常", task.id)
+            return False
+        return True
 
     @staticmethod
     def _ensure_status(task: TaskRecord, target: TaskStatus) -> None:
@@ -336,19 +348,12 @@ class TaskScheduler:
         ``on_task_done`` 回调绑定本方法）——同步释放并发额度、
         对成功的 CRON 任务计算下次触发时间。完成通知不走事件总线，
         保证"任务结束 → 额度释放 → 下一任务启动"的时序可预期。
-        """
-        await self._do_on_task_completed(task)
 
-    async def _do_on_task_completed(self, task: TaskRecord) -> None:
-        """共享完成处理逻辑（``on_task_completed`` 唯一入口）。
-
-        从 _running 集合中移除，释放并发额度。对于成功的 CRON 任务，
-        计算下次触发时间并重新调度（循环执行）。
-        仅 COMPLETED 的 CRON 任务循环；FAILED/CANCELLED 不循环，避免死循环。
+        处理逻辑：从 _running 集合中移除，释放并发额度；仅 COMPLETED 的
+        CRON 任务计算下次触发时间并重新调度（FAILED/CANCELLED 不循环，
+        避免死循环）。
         """
         self._running.discard(task.id)
-        # 对于成功的 CRON 任务，计算下次触发时间并重新调度（循环执行）。
-        # 仅 COMPLETED 的 CRON 任务循环；FAILED/CANCELLED 不循环，避免死循环。
         if (
             task.status == TaskStatus.COMPLETED
             and task.trigger_type == TriggerType.CRON
@@ -444,20 +449,55 @@ class TaskScheduler:
         except Exception:
             logger.exception("执行任务 %s 时发生未处理异常", task.id)
 
+    async def refresh_pending(self, task_id: str) -> None:
+        """重读 *task_id* 的最新持久化记录并替换 pending 队列中的快照。
+
+        队列中存的是入队时刻的 TaskRecord 快照；``TaskCrud.modify_task``
+        修改 intent/priority 后调用本方法，避免派发时把陈旧快照整行写回
+        （丢失修改）以及 priority 变更不重排的问题。
+        """
+        for idx, t in enumerate(self._pending):
+            if t.id != task_id:
+                continue
+            try:
+                fresh = await self._store.get(task_id)
+            except Exception:
+                logger.debug("刷新 pending 快照失败（保持旧快照）: %s", task_id, exc_info=True)
+                return
+            if fresh is None or fresh.status != TaskStatus.PENDING:
+                # 任务已被删除/不再排队（如已取消）→ 从队列移除
+                self._pending.pop(idx)
+                return
+            self._pending[idx] = fresh
+            self._pending.sort(key=lambda t: t.priority, reverse=True)
+            logger.debug("任务 %s 的 pending 快照已刷新", task_id)
+            return
+
     async def _try_dispatch(self) -> None:
         """尝试从 pending 队列中取出任务并启动。
 
-        按 priority 降序处理，直到额度满或 pending 队列为空。
-        ``_try_start`` 返回 ``"retry"`` 的任务放回队首（临时不可启动），
-        返回 ``"started"`` / ``"abandoned"`` 的继续处理下一个任务
-        （abandoned 多为 CAS 抢占失败，任务由其他 Runner 负责）。
+        按 priority 降序处理，直到额度满或 pending 队列为空。派发前按 id
+        从 store 重读最新记录（队列快照可能是修改前的陈旧版本——重读保证
+        intent/priority 等字段的修改不被覆盖，且并发取消/删除的任务直接
+        从队列移除）。``_try_start`` 返回 ``"retry"`` 的任务放回队首
+        （临时不可启动），返回 ``"started"`` / ``"abandoned"`` 的继续处理
+        下一个任务（abandoned 多为 CAS 抢占失败，任务由其他 Runner 负责）。
         """
         while self._pending and len(self._running) < self._config.max_concurrent_tasks:
             task = self._pending.pop(0)
-            outcome = await self._try_start(task)
+            try:
+                fresh = await self._store.get(task.id)
+            except Exception:
+                logger.debug("派发前重读任务 %s 失败，按旧快照处理", task.id, exc_info=True)
+                fresh = task
+            if fresh is None:
+                continue  # 已删除 → 移出队列
+            if fresh.status != TaskStatus.PENDING:
+                continue  # 已被并发修改为非排队状态（取消/终态）→ 移出队列
+            outcome = await self._try_start(fresh)
             if outcome == "retry":
                 # 放回队首（priority 高的优先重试）
-                self._pending.insert(0, task)
+                self._pending.insert(0, fresh)
                 break
 
     def active_count(self) -> int:
@@ -471,8 +511,9 @@ class TaskScheduler:
 
         每秒执行：
         1. 检查所有 SCHEDULED 任务是否到点 → 移入 PENDING
-        2. 检查 RUNNING 任务是否超时（max_runtime_min）
-        3. 触发 _try_dispatch
+        2. 回读孤儿 PENDING 行（已落库但不在内存队列）→ 补入队列
+        3. 检查 RUNNING 任务是否超时（max_runtime_min）
+        4. 触发 _try_dispatch
         """
         try:
             while not self._stop_event.is_set():
@@ -515,7 +556,20 @@ class TaskScheduler:
                         )
                         continue
 
-                # ── 2) 超时检测 ──
+                # ── 2) 孤儿 PENDING 拾取 ──
+                # pending 队列是纯内存的：崩溃/异常可能留下已落库但不在队列的
+                # PENDING 行（如 enqueue 在 save 之后、push 之前被中断）。
+                # 每轮回读补入队列，避免任务成为永久孤儿（重启恢复同理）。
+                pending_ids = {t.id for t in self._pending}
+                for t in active:
+                    if t.status != TaskStatus.PENDING:
+                        continue
+                    if t.id in pending_ids or t.id in self._running:
+                        continue
+                    self._push_pending(t)
+                    logger.info("任务 %s 已从持久化记录拾取回 pending 队列", t.id)
+
+                # ── 3) 超时检测 ──
                 timeout_min = self._config.max_runtime_min
                 if timeout_min > 0:
                     for tid in list(self._running):
@@ -563,7 +617,7 @@ class TaskScheduler:
                                 TaskCommand(task_id=tid, kind=CommandKind.CANCEL),
                             )
 
-                # ── 3) 触发分发 ──
+                # ── 4) 触发分发 ──
                 await self._try_dispatch()
         except asyncio.CancelledError:
             raise

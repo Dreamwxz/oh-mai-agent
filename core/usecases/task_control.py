@@ -59,7 +59,10 @@ class TaskControl:
         )
         reply_task.mark_as_reply()
         await self._store.save(reply_task)
-        await self._scheduler.enqueue(reply_task)
+        enqueued = await self._scheduler.enqueue(reply_task)
+        if enqueued is False:
+            logger.error("回复 instant 任务 %s 入队失败（已保存），原始任务 %s 的回复将不发送", reply_task.id, task.id)
+            return
         logger.info(
             "回复 instant 任务 %s 已分发，原始任务 %s",
             reply_task.id,

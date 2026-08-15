@@ -101,7 +101,13 @@ class TaskCrud:
         # 任务理应以创建者角色执行。
         task.set_caller_role(caller_role)
         await self._store.save(task)
-        await self._scheduler.enqueue(task)
+        enqueued = await self._scheduler.enqueue(task)
+        if enqueued is False:
+            # 入队失败（已记日志）：任务已落库但不会执行——必须让调用方感知，
+            # 否则表现为"创建成功却永远不跑"。重启恢复会把 PENDING 行重新入队，
+            # 但调用方不应依赖这一兜底。
+            logger.error("任务 %s 已保存但入队失败，任务将不会执行", task.id)
+            return False, "任务创建失败：调度器入队异常（已保存，详见日志）"
         logger.info(
             "任务 %s 创建成功：title=%s level=%s owner=%s trigger=%s",
             task.id, task.title, task.level.value, task.owner, task.trigger_type.value,
@@ -218,6 +224,11 @@ class TaskCrud:
             modified = True
         if modified:
             await self._store.save(resolved)
+            # 对 PENDING 任务：刷新调度器 pending 队列中的快照并重排——
+            # 否则派发时旧快照会覆盖本次 intent/priority 修改（丢失更新），
+            # priority 变更也不会触发重排。
+            if resolved.status == TaskStatus.PENDING:
+                await self._scheduler.refresh_pending(resolved.id)
             logger.info("任务 %s 已修改 (intent=%s inject=%s pri=%s)", resolved.id, bool(new_intent), bool(inject_instruction), priority)
         return True, "修改成功" if modified else "无变更"
 

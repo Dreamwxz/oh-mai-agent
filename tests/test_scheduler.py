@@ -408,7 +408,8 @@ class TestInvalidCron:
 
         t = make_task("t1", trigger_type=TriggerType.CRON, cron_expr="invalid!!!")
         await store.save(t)
-        await scheduler.enqueue(t)
+        ok = await scheduler.enqueue(t)
+        assert ok is True  # 任务已被确定性地标记 FAILED，属已处理
 
         updated = await store.get("t1")
         assert updated is not None
@@ -416,6 +417,51 @@ class TestInvalidCron:
         assert len(updated._status_log) == 1
         assert updated._status_log[0].status == TaskStatus.FAILED
         assert updated._status_log[0].reason == ""
+
+    @pytest.mark.asyncio
+    async def test_empty_cron_fails_instead_of_every_minute(
+        self, store: TaskStore, task_config: TaskConfig, command_bus: Any,
+    ) -> None:
+        """空 cron 表达式不再静默升级为每分钟执行——走无效表达式同一 FAILED 路径。"""
+        scheduler = TaskScheduler(task_config, store, _noop_executor, command_bus=command_bus)
+
+        t = make_task("t-empty-cron", trigger_type=TriggerType.CRON, cron_expr="")
+        await store.save(t)
+        ok = await scheduler.enqueue(t)
+        assert ok is True
+
+        updated = await store.get("t-empty-cron")
+        assert updated is not None
+        assert updated.status == TaskStatus.FAILED
+        assert updated.cron_expr == ""
+
+
+class TestEnqueueReturnsBool:
+    """enqueue 必须让调用方感知"已落库但未入队"的失败，不得静默吞掉。"""
+
+    @pytest.mark.asyncio
+    async def test_enqueue_returns_true_on_success(
+        self, store: TaskStore, task_config: TaskConfig, command_bus: Any,
+    ) -> None:
+        scheduler = TaskScheduler(task_config, store, _noop_executor, command_bus=command_bus)
+        t = make_task("ok-1", trigger_type=TriggerType.DELAY, delay_seconds=10)
+        await store.save(t)
+        assert await scheduler.enqueue(t) is True
+        assert (await store.get("ok-1")).status == TaskStatus.SCHEDULED
+
+    @pytest.mark.asyncio
+    async def test_enqueue_returns_false_on_save_failure(
+        self, store: TaskStore, task_config: TaskConfig, command_bus: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        async def _boom_save(task: TaskRecord, **kwargs: object) -> bool:
+            raise RuntimeError("save down")
+
+        scheduler = TaskScheduler(task_config, store, _noop_executor, command_bus=command_bus)
+        t = make_task("fail-1", trigger_type=TriggerType.DELAY, delay_seconds=10)
+
+        monkeypatch.setattr(store, "save", _boom_save)
+        assert await scheduler.enqueue(t) is False
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -463,21 +509,23 @@ class TestQuotaReservation:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """save 失败时任务回滚到 PENDING，不得卡死队首（F2 Finding 1）。"""
+        t = make_task("save-fail", level=TaskLevel.AGENT, status=TaskStatus.PENDING)
+        await store.save(t)  # 落库后入队（派发前按 id 重读最新记录）；须在 patch 之前
+
         async def failing_save(task: TaskRecord, **kwargs: object) -> bool:
             raise RuntimeError("database unavailable")
 
         monkeypatch.setattr(store, "save", failing_save)
         scheduler = TaskScheduler(task_config, store, _noop_executor, command_bus=command_bus)
 
-        t = make_task("save-fail", level=TaskLevel.AGENT, status=TaskStatus.PENDING)
         scheduler._pending.append(t)
 
         await scheduler._try_dispatch()
 
         # 额度已释放、任务回滚 PENDING，且未卡死在 running→running
         assert t.id not in scheduler._running
-        assert t.status == TaskStatus.PENDING
-        assert scheduler._pending[0] is t
+        assert scheduler._pending[0].id == t.id
+        assert scheduler._pending[0].status == TaskStatus.PENDING
 
     @pytest.mark.asyncio
     async def test_try_start_cas_preemption_abandons_task(
@@ -1074,12 +1122,13 @@ class TestSchedulerErrorPaths:
     async def test_try_start_illegal_transition_abandons_task(
         self, store: TaskStore, task_config: TaskConfig, command_bus: Any,
     ) -> None:
-        """pending 中任务已被并发取消（内存已终态）→ 启动转换失败，
-        任务从调度队列移除（abandoned），不重试、不卡队首。"""
+        """pending 中任务已被并发取消（持久化为终态）→ 派发前重读发现
+        非 PENDING，任务从调度队列移除，不重试、不卡队首。"""
         scheduler = TaskScheduler(task_config, store, _noop_executor, command_bus=command_bus)
         t = make_task("race-1", status=TaskStatus.PENDING)
         await store.save(t)
         t.force(TaskStatus.CANCELLED, actor="test", reason="concurrent-cancel")
+        await store.save(t)  # 并发取消已落盘 → 重读可见终态
         scheduler._pending.append(t)
 
         await scheduler._try_dispatch()

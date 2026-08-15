@@ -264,14 +264,20 @@ async def recover_active_tasks(plugin: "MaibotAgentPlugin", logger: Any) -> None
     for task in active:
         action = TaskRecovery.recover(task)
         if action == RecoveryAction.ENQUEUE:
-            await plugin._scheduler.enqueue(task)
+            enqueued = await plugin._scheduler.enqueue(task)
+            if enqueued is False:
+                logger.warning("任务 %s 恢复入队失败（已落库，等待下次重启重试）", task.id)
+                continue
             recovered_count += 1
-            logger.debug("任务 %s 已重新入队 (SCHEDULED)", task.id)
+            logger.debug("任务 %s 已重新入队 (%s)", task.id, task.status.value)
         elif action == RecoveryAction.PENDING:
             await plugin._store.save(task)
-            await plugin._scheduler.enqueue(task)
+            enqueued = await plugin._scheduler.enqueue(task)
+            if enqueued is False:
+                logger.warning("任务 %s 恢复入队失败（已落库，等待下次重启重试）", task.id)
+                continue
             recovered_count += 1
-            logger.info("任务 %s 已恢复: RUNNING → PENDING", task.id)
+            logger.info("任务 %s 已恢复: 重新排队 (%s)", task.id, task.status.value)
         elif action == RecoveryAction.WAITING:
             # 保持 WAITING_INPUT；chat.receive.after_process Hook 收到回复时通过
             # handle_user_reply 通过命令总线发送 RESUME_REPLY 恢复
