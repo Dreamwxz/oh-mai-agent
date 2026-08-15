@@ -24,7 +24,7 @@ MaiBot 的离线任务不是「创建即执行」这么简单。任务创建后�
 
 调度器由 `lifecycle.py:81-86` 构造，依赖四个东西：`TaskConfig`（并发/超时参数）、`TaskStore`（持久化）、executor 回调（实际执行入口）、`TaskCommandBus`（协作控制通道）。
 
-executor 回调是一个闭包（`lifecycle.py:72-79`），经 `plugin._executor_ref["tm"]` 打破循环依赖：调度器先于 TaskManager 构造，但派发时通过引用拿到已就绪的 TaskManager，按任务等级分发到 `execute_instant` 或 `_build_agent_loop`。`TaskScheduler.start()` 在 `lifecycle.py:117` 调用，此时 executor 引用已指向 TaskManager，派发的任务可以安全执行。
+executor 回调**后绑定**（`core/scheduler.py` 的 `set_executor`）：调度器先于 TaskManager 构造（`executor` 参数可选），TaskManager 就绪后 `lifecycle.py` 调用 `scheduler.set_executor(task_manager.execute_task)` 注入——`TaskManager.execute_task` 按任务等级分发到 `execute_instant` 或 AgentLoop。`TaskScheduler.start()` 在 `lifecycle.py` 调用时执行回调已绑定，派发的任务可以安全执行。
 
 ### 入队：三条路径，一个队列
 

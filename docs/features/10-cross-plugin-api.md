@@ -15,7 +15,7 @@ MaiBot 的插件生态里，插件之间需要协作。oh-mai-agent 掌握着完
 
 ### 向外暴露：build_api_handlers 构建 6 个端点
 
-`build_api_handlers(task_manager, resolver, config)`（`api_expose.py:87-416`）是暴露层的核心。它接收 TaskManager 门面、权限解析器和完整配置，返回 6 个端点描述符的列表，每个描述符包含 name / description / version / public / handler 五个字段。
+`build_api_handlers(task_manager)`（`api_expose.py`）是暴露层的核心。它接收 TaskManager 门面，返回 6 个端点描述符的列表，每个描述符包含 name / description / version / public / handler 五个字段；handler 由统一的 `_wrap_handler` 工厂构建（提取参数 → 调用 → 结果映射 → 异常兜底），端点只声明差异。
 
 每个 handler 是 `async def _xxx(**kwargs)` 闭包，遵循同一套处理模式：从 kwargs 提取参数 → 类型安全转换（`_to_int`、`_parse_status`）→ 调用 TaskManager 门面方法 → 返回统一的 `{"success": bool, ...}` 结构，失败时附带 `"error"` 或 `"message"` 字段。以 create 为例（`api_expose.py:127-198`）：解析 intent / owner / platform / stream_id 等参数，然后调用 `task_manager.create_task(...)`，成功返回 `{"success": True, "task_id": ..., "title": ..., "level": ...}`。create 端点不接受 `level` 参数——INSTANT 仅由定时任务与 Agent 模型显式创建，跨插件 API 创建的任务固定为 agent 级。
 

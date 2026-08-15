@@ -88,7 +88,7 @@ Agent 侧还有一组对应的调用工具：`refresh_plugin_api_tools` 动态�
 ### 已知限制
 
 1. **api_expose 权限层未执行**：`max_level` 声明但未强制执行，6 个端点全部 public=true。
-2. **resolver 参数未使用**：`build_api_handlers` 接收 resolver（api_expose.py:89）但内部从不调用，仅保留签名。
+2. **resolver / config 参数已删除**：`build_api_handlers` 签名收敛为单参数 `build_api_handlers(task_manager)`，未使用的 resolver 与 config 参数已移除。
 3. **后果边界**：跨插件 API 无角色门控，任务权限只依赖用户交互层与 Agent 工具层的检查；这两层本身是完整的。
 
 ### 相关文档

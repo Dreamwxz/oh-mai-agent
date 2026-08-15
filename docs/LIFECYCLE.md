@@ -154,7 +154,7 @@ on_load → load_plugin()（lifecycle.py:43-153）
 10. 注册 6 个跨插件动态 API                        lifecycle.py:141-150
 ```
 
-关键点：第 3 步的 `_scheduler_executor` 闭包（`lifecycle.py:72-79`）经 `plugin._executor_ref["tm"]` 引用 TaskManager，打破「调度器 → 执行器 → 任务管理器 → 调度器」的循环依赖；第 5 步 `setup()`（core/task_manager.py 的 `setup`）注册任务管理工具、info、file（role_provider 取 current_task 角色）、ask_user、send_message、跨插件 API、子 Agent 与命令执行工具（`[shell] enabled` 关闭时不注册）。
+关键点：第 3 步构造 `TaskScheduler` 时**不传 executor**（`executor` 改为可选，`core/scheduler.py`），TaskManager 就绪后经 `scheduler.set_executor(task_manager.execute_task)`（`lifecycle.py`）后绑定，打破「调度器 → 执行器 → 任务管理器 → 调度器」的构造环；第 5 步 `setup()`（core/task_manager.py 的 `setup`）注册任务管理工具、info、file（role_provider 取 current_task 角色）、ask_user、send_message、跨插件 API、子 Agent 与命令执行工具（`[shell] enabled` 关闭时不注册）。
 
 ### 配置热更新
 
