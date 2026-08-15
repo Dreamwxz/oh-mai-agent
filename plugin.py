@@ -512,6 +512,8 @@ class MaibotAgentPlugin(MaiBotPlugin):
 
         从 message dict 提取字段：
         - session_id → stream_id
+        - platform → platform（MaiBot 序列化消息自带；部分宿主 session_id
+          是不带平台前缀的裸 UUID，须显式传 platform 才能拼出 owner）
         - message_info.user_info.user_id → user_id
         - processed_plain_text → plain_text
 
@@ -521,6 +523,7 @@ class MaibotAgentPlugin(MaiBotPlugin):
         try:
             message = kwargs.get("message") or {}
             stream_id = str(message.get("session_id", "")) if isinstance(message, dict) else ""
+            platform = str(message.get("platform", "")) if isinstance(message, dict) else ""
             user_id = ""
             plain_text = ""
             if isinstance(message, dict):
@@ -534,6 +537,7 @@ class MaibotAgentPlugin(MaiBotPlugin):
                 stream_id=stream_id,
                 user_id=user_id,
                 reply=plain_text,
+                platform=platform or None,
             )
         except Exception:
             self.ctx.logger.debug("用户回复匹配失败", exc_info=True)

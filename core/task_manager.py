@@ -353,11 +353,13 @@ class TaskManager:
         stream_id: str,
         user_id: str,
         reply: str,
+        platform: str | None = None,
     ) -> None:
         return await self._control.handle_user_reply(
             stream_id=stream_id,
             user_id=user_id,
             reply=reply,
+            platform=platform,
         )
 
     # ── 指令注入转发 ─────────────────────────────────────────────────

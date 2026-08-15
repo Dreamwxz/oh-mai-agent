@@ -85,10 +85,14 @@ class TaskControl:
         stream_id: str,
         user_id: str,
         reply: str,
+        platform: str | None = None,
     ) -> None:
         """Match a user reply to a waiting task and resume it."""
-        platform = stream_id.split(":", 1)[0] if ":" in stream_id else ""
-        full_owner = f"{platform}:{user_id}"
+        # 平台优先取调用方显式传入（MaiBot 消息 dict 自带 platform 字段）；
+        # 未传入时退化为从 stream_id 前缀推断（如 "qq:1591625223"）。
+        if not platform:
+            platform = stream_id.split(":", 1)[0] if ":" in stream_id else ""
+        full_owner = f"{platform}:{user_id}" if platform else ""
         # 群聊中由 Planner 工具创建的任务 owner 为 "planner:{stream_id}"（无单一
         # 委托用户，提问对象是整个群）；这类任务视作"群内任何人回复都有效"。
         # （tools/planner/task_tools.py:_planner_owner 的群聊语义即如此。）
@@ -100,8 +104,22 @@ class TaskControl:
             limit=50,
         )
         for task in tasks:
-            if task.owner != full_owner and task.owner != planner_owner:
+            owner_matched = (
+                task.owner == full_owner
+                or task.owner == planner_owner
+                # 兜底：部分宿主的 session_id 是不带平台前缀的裸 UUID（如
+                # MaiBot 的 "96957f3c-..."），此时拼不出 platform:user_id；
+                # 同一 stream 内用户身份唯一，按 owner 后缀 ":user_id" 匹配
+                # 仍可精确命中（平台已知时不做模糊匹配，full_owner 非空即排除）。
+                or (not full_owner and task.owner.endswith(f":{user_id}"))
+            )
+            if not owner_matched:
                 continue
+            if task.owner != full_owner and task.owner != planner_owner:
+                logger.debug(
+                    "用户回复按 owner 后缀匹配：task=%s owner=%s user_id=%s",
+                    task.id, task.owner, user_id,
+                )
             fresh = await self._store.get(task.id)
             if fresh is None:
                 continue

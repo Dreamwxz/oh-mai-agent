@@ -1350,6 +1350,103 @@ class TestHandleUserReplyPrivateStream:
         assert updated is not None
         assert updated.user_reply() == "继续"
 
+    @pytest.mark.asyncio
+    async def test_private_stream_bare_uuid_with_platform(
+        self, real_store: TaskStore, command_bus: Any,
+        mock_ctx: MockCtx, resolver: PermissionResolver,
+        config: MaibotAgentConfig,
+    ) -> None:
+        """部署实测：session_id 是裸 UUID（如 96957f3c-...），platform 显式传入 → 匹配成功。"""
+        await real_store.init()
+        sched = FakeScheduler()
+        control = TaskControl(
+            store=real_store, scheduler=sched,
+            command_bus=command_bus, executor_factory=MagicMock(),
+            config=config, prompt_manager=None,
+            prompt_service=None, ctx=mock_ctx,
+        )
+        task = make_task(
+            "t2", owner="qq:1591625223",
+            stream_id="96957f3c849ea3609c331319e64d97e6", platform="qq",
+            status=TaskStatus.WAITING_INPUT,
+        )
+        await real_store.save(task)
+
+        await control.handle_user_reply(
+            stream_id="96957f3c849ea3609c331319e64d97e6",
+            user_id="1591625223",
+            reply="低调的空格",
+            platform="qq",
+        )
+
+        updated = await real_store.get("t2")
+        assert updated is not None
+        assert updated.user_reply() == "低调的空格"
+
+    @pytest.mark.asyncio
+    async def test_private_stream_bare_uuid_suffix_fallback(
+        self, real_store: TaskStore, command_bus: Any,
+        mock_ctx: MockCtx, resolver: PermissionResolver,
+        config: MaibotAgentConfig,
+    ) -> None:
+        """裸 UUID + 未传 platform：无法拼出 platform:user_id，按 owner 后缀 :user_id 兜底匹配。"""
+        await real_store.init()
+        sched = FakeScheduler()
+        control = TaskControl(
+            store=real_store, scheduler=sched,
+            command_bus=command_bus, executor_factory=MagicMock(),
+            config=config, prompt_manager=None,
+            prompt_service=None, ctx=mock_ctx,
+        )
+        task = make_task(
+            "t3", owner="qq:1591625223",
+            stream_id="96957f3c849ea3609c331319e64d97e6", platform="qq",
+            status=TaskStatus.WAITING_INPUT,
+        )
+        await real_store.save(task)
+
+        await control.handle_user_reply(
+            stream_id="96957f3c849ea3609c331319e64d97e6",
+            user_id="1591625223",
+            reply="继续",
+        )
+
+        updated = await real_store.get("t3")
+        assert updated is not None
+        assert updated.user_reply() == "继续"
+
+    @pytest.mark.asyncio
+    async def test_private_stream_bare_uuid_stranger_not_matched(
+        self, real_store: TaskStore, command_bus: Any,
+        mock_ctx: MockCtx, resolver: PermissionResolver,
+        config: MaibotAgentConfig,
+    ) -> None:
+        """裸 UUID + 未传 platform：后缀兜底不误匹配其他用户（私聊陌生人回复不唤醒）。"""
+        await real_store.init()
+        sched = FakeScheduler()
+        control = TaskControl(
+            store=real_store, scheduler=sched,
+            command_bus=command_bus, executor_factory=MagicMock(),
+            config=config, prompt_manager=None,
+            prompt_service=None, ctx=mock_ctx,
+        )
+        task = make_task(
+            "t4", owner="qq:1591625223",
+            stream_id="96957f3c849ea3609c331319e64d97e6", platform="qq",
+            status=TaskStatus.WAITING_INPUT,
+        )
+        await real_store.save(task)
+
+        await control.handle_user_reply(
+            stream_id="96957f3c849ea3609c331319e64d97e6",
+            user_id="999",
+            reply="你谁",
+        )
+
+        updated = await real_store.get("t4")
+        assert updated is not None
+        assert updated.user_reply() == ""  # 未写入，未唤醒
+
 
 class TestHandleUserReplyGroupPlannerTask:
     """群聊流中由 Planner 工具创建的任务（owner=planner:qq:group:xxx）。

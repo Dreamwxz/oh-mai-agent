@@ -35,17 +35,20 @@ class TestOnMessageHook:
         session_id: str = "qq:g:123",
         user_id: str = "10001",
         plain_text: str = "\u597d\u7684",
+        platform: str = "qq",
     ) -> dict[str, Any]:
         """构造与 _session_message_to_dict() 序列化后的 message dict 一致的 kwargs。"""
-        return {
-            "message": {
-                "session_id": session_id,
-                "message_info": {
-                    "user_info": {"user_id": user_id},
-                },
-                "processed_plain_text": plain_text,
+        message: dict[str, Any] = {
+            "session_id": session_id,
+            "platform": platform,
+            "message_info": {
+                "user_info": {"user_id": user_id},
             },
+            "processed_plain_text": plain_text,
         }
+        if not platform:
+            message.pop("platform")
+        return {"message": message}
 
     # ── 正常路径 ──────────────────────────────────────────────────────
 
@@ -65,6 +68,45 @@ class TestOnMessageHook:
             stream_id="qq:g:123",
             user_id="10001",
             reply="\u597d\u7684",
+            platform="qq",
+        )
+
+    @pytest.mark.asyncio
+    async def test_normal_path_bare_uuid_session_passes_platform(
+        self, plugin: MaibotAgentPlugin,
+    ) -> None:
+        """裸 UUID session_id（MaiBot 部署实测格式）：platform 必须显式透传。"""
+        kwargs = self._make_message_kwargs(
+            session_id="96957f3c849ea3609c331319e64d97e6",
+            user_id="1591625223",
+            plain_text="继续",
+        )
+        result = await plugin.on_message(**kwargs)
+
+        assert result == {"action": "continue"}
+        tm = plugin._task_manager  # type: ignore[attr-defined]
+        tm.handle_user_reply.assert_awaited_once_with(
+            stream_id="96957f3c849ea3609c331319e64d97e6",
+            user_id="1591625223",
+            reply="继续",
+            platform="qq",
+        )
+
+    @pytest.mark.asyncio
+    async def test_normal_path_without_platform_passes_none(
+        self, plugin: MaibotAgentPlugin,
+    ) -> None:
+        """message dict 无 platform 字段：传 None，由下游做后缀兜底。"""
+        kwargs = self._make_message_kwargs(platform="")
+        result = await plugin.on_message(**kwargs)
+
+        assert result == {"action": "continue"}
+        tm = plugin._task_manager  # type: ignore[attr-defined]
+        tm.handle_user_reply.assert_awaited_once_with(
+            stream_id="qq:g:123",
+            user_id="10001",
+            reply="\u597d\u7684",
+            platform=None,
         )
 
     @pytest.mark.asyncio

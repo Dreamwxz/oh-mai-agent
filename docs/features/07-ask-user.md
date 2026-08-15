@@ -68,9 +68,9 @@ _handle_ask_user 恢复：transition(RUNNING) → 返回 reply 给 Agent
 
 用户回复经三段链路回到挂起的 AgentLoop：
 
-1. **Hook 入口**：插件注册 `chat.receive.after_process` Hook（`plugin.py:532-537`，name=`agent_user_reply`，OBSERVE 模式），从 message 中提取 `session_id` → stream_id、`user_info.user_id` → user_id、`processed_plain_text` → 回复文本（`plugin.py:550-556`），任一字段为空直接跳过。
+1. **Hook 入口**：插件注册 `chat.receive.after_process` Hook（`plugin.py:532-537`，name=`agent_user_reply`，OBSERVE 模式），从 message 中提取 `session_id` → stream_id、`platform` → platform、`user_info.user_id` → user_id、`processed_plain_text` → 回复文本（`plugin.py:550-556`），任一字段为空直接跳过。platform 必须显式透传：MaiBot 的 session_id 是不带平台前缀的裸 UUID（如 `96957f3c-...`），仅靠 stream_id 无法推断平台。
 2. **门面转发**：`TaskManager.handle_user_reply()`（`core/task_manager.py:374`）是门面方法，转发给 TaskControl。
-3. **匹配与唤醒**：`TaskControl.handle_user_reply()`（`core/usecases/task_control.py:86-124`）按 `stream_id` 前缀解析出 platform，拼成 `full_owner = platform:user_id` 与任务 owner 做精确比较（`task_control.py:94-95`），在查询结果中找第一个 owner 匹配且仍为 WAITING_INPUT 的任务（二次 `store.get` 确认，防状态已变），把回复经 `set_user_reply()` 写入并落盘，再 `command_bus.send(RESUME_REPLY)`（`task_control.py:110-116`），随后 `return`，**单次只唤醒第一个匹配任务**。
+3. **匹配与唤醒**：`TaskControl.handle_user_reply()`（`core/usecases/task_control.py:86-124`）以显式传入的 platform（缺省时按 `stream_id` 前缀推断）拼成 `full_owner = platform:user_id` 与任务 owner 做精确比较（`task_control.py:94-95`），在查询结果中找第一个 owner 匹配且仍为 WAITING_INPUT 的任务（二次 `store.get` 确认，防状态已变），把回复经 `set_user_reply()` 写入并落盘，再 `command_bus.send(RESUME_REPLY)`（`task_control.py:110-116`），随后 `return`，**单次只唤醒第一个匹配任务**。平台未知（裸 UUID 且未传 platform）时按 owner 后缀 `:user_id` 兜底匹配——同一 stream 内用户身份唯一，后缀匹配仍精确；平台已知时不做模糊匹配。
 
 AgentLoop 侧，`_on_bus_command()` 收到 RESUME_REPLY 后把回复经 `set_user_reply()` 写入并 `resume_event.set()`（`executor/agent_loop.py:273-279`），与挂起流程第 6 步的 `wait()` 衔接，任务恢复。
 
