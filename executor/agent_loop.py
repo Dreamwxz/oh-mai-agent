@@ -20,7 +20,7 @@ from collections.abc import Callable, Awaitable
 from datetime import datetime
 from typing import Any, TYPE_CHECKING
 
-from ..bus.messages import CommandKind, EventKind, TaskCommand, TaskEvent
+from ..bus.messages import CommandKind, TaskCommand
 from ..permission import Role
 from ..prompt.manager import PromptManager
 from ..domain.task_record import TaskRecord, TaskStatus
@@ -70,6 +70,7 @@ class AgentLoop:
         max_rounds: int = 30,
         role_provider: Callable[[], Role] | None = None,
         send_final: Callable[[TaskRecord, str], Awaitable[None]] | None = None,
+        on_task_done: Callable[[TaskRecord], Awaitable[None]] | None = None,
         prompt_manager: PromptManager | None = None,
         prompt_service: Any | None = None,
         command_bus: Any,
@@ -84,6 +85,10 @@ class AgentLoop:
             max_rounds: LLM 最大对话轮数（默认 30）。
             role_provider: 可选 — 角色解析回调，默认返回 GUEST。
             send_final: 可选 — 最终结果发送回调。
+            on_task_done: 可选 — 任务进入终态后的完成通知回调
+                （``async def on_task_done(task)``，task 已为 COMPLETED/FAILED/
+                CANCELLED）。由执行器注入 ``scheduler.on_task_completed``，
+                统一"完成即释放并发额度"的直接调用通道（不经过事件总线）。
             prompt_manager: 可选 — PromptManager 实例（用于模板化提示词）。
             prompt_service: 可选 — PromptService 实例（builder 模式构建提示词）。
             command_bus: TaskCommandBus 实例（用于跨组件命令通信）。
@@ -95,6 +100,7 @@ class AgentLoop:
         self._max_rounds = max_rounds
         self._role_provider = role_provider
         self._send_final = send_final
+        self._on_task_done = on_task_done
         self._prompt_manager = prompt_manager
         self._prompt_service = prompt_service
         self._command_bus = command_bus
@@ -348,17 +354,19 @@ class AgentLoop:
             task.started_at = datetime.now()
             await self._store.save(task)
 
-    async def _notify_completed(
-        self, task: TaskRecord, *, success: bool, error: str = "",
-    ) -> None:
-        """通过命令总线发布任务完成事件。"""
-        kind = EventKind.COMPLETED if success else EventKind.FAILED
-        payload: dict[str, Any] = {}
-        if error:
-            payload["error"] = error
-        await self._command_bus.publish(
-            TaskEvent(task_id=task.id, kind=kind, payload=payload),
-        )
+    async def _notify_done(self, task: TaskRecord) -> None:
+        """通过注入的完成回调通知调度器（统一直接调用通道）。
+
+        任务已进入终态（COMPLETED / FAILED / CANCELLED）后调用；
+        回调即 ``scheduler.on_task_completed``——释放并发额度 + CRON 重排
+        由调度器在调用栈内同步完成，不经过事件总线（时序可预期）。
+        """
+        if self._on_task_done is None:
+            return
+        try:
+            await self._on_task_done(task)
+        except Exception:
+            logger.warning("任务 %s 完成通知失败：%s", task.id, exc_info=True)
 
     async def _finalize_cancelled(self, task: TaskRecord) -> None:
         guard_status: TaskStatus | None = None
@@ -381,18 +389,14 @@ class AgentLoop:
             saved = True
         if not saved:
             # 守卫保存被原子拒绝：持久化记录已被并发终态（如超时 FAILED）
-            # 覆盖。保持记录终态，不再广播 CANCELLED，避免记录/事件不一致。
+            # 覆盖。保持记录终态，不再通知调度器（该终态由并发方负责通知），
+            # 避免重复释放额度/重复 CRON 重排。
             logger.warning(
-                "任务 %s 取消收尾被并发终态拦截（持久化已非 %s），跳过 CANCELLED 事件",
+                "任务 %s 取消收尾被并发终态拦截（持久化已非 %s），跳过完成通知",
                 task.id, guard_status,
             )
             return
-        try:
-            await self._command_bus.publish(
-                TaskEvent(task_id=task.id, kind=EventKind.CANCELLED),
-            )
-        except Exception as exc:
-            logger.warning("任务 %s 取消事件发布失败：%s", task.id, exc)
+        await self._notify_done(task)
 
     # ── 主循环 ─────────────────────────────────────────────────────────
 
@@ -614,10 +618,10 @@ class AgentLoop:
             )
             if not saved:
                 logger.warning(
-                    "任务 %s 完成保存被并发终态拦截，跳过 COMPLETED 事件", task.id,
+                    "任务 %s 完成保存被并发终态拦截，跳过完成通知", task.id,
                 )
                 return
-            await self._notify_completed(task, success=True)
+            await self._notify_done(task)
 
         except Exception as exc:
             if self._cancelled:
@@ -634,7 +638,7 @@ class AgentLoop:
                 # 若已处于终态，transition 可能抛出异常。
                 task.force(TaskStatus.FAILED, actor="agent_loop", reason=str(exc))
             await self._store.save(task)
-            await self._notify_completed(task, success=False, error=str(exc))
+            await self._notify_done(task)
 
         finally:
             logger.info("任务 %s Agent 循环退出", task.id)

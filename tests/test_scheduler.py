@@ -24,7 +24,7 @@ from oh_mai_agent.domain.task_record import TaskLevel, TaskRecord, TaskStatus, T
 from oh_mai_agent.domain.task_store import TaskStore
 from oh_mai_agent.executor.base import ExecutionContext
 from oh_mai_agent.executor.instant import InstantExecutor, ReplySender
-from oh_mai_agent.bus.messages import CommandKind, EventKind, TaskCommand, TaskEvent
+from oh_mai_agent.bus.messages import CommandKind, TaskCommand
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1019,35 +1019,14 @@ class TestSchedulerErrorPaths:
             store.save = real_save  # type: ignore[method-assign]
 
     @pytest.mark.asyncio
-    async def test_event_listener_ignores_non_event(
+    async def test_on_task_completed_releases_slot_and_dispatches(
         self, store: TaskStore, task_config: TaskConfig, command_bus: Any,
     ) -> None:
-        scheduler = TaskScheduler(task_config, store, _noop_executor, command_bus=command_bus)
-        await scheduler._on_task_event("not-an-event")  # 不应抛异常
+        """完成通知（on_task_completed 唯一入口）→ 从运行集移除并触发补位派发。
 
-    @pytest.mark.asyncio
-    async def test_event_listener_ignores_unknown_kind(
-        self, store: TaskStore, task_config: TaskConfig, command_bus: Any,
-    ) -> None:
-        scheduler = TaskScheduler(task_config, store, _noop_executor, command_bus=command_bus)
-        # WAITING_INPUT 事件已移除（零消费者）；kind 过滤仍作为防御性守卫保留，
-        # 用原始字符串模拟未知事件类型，验证不会误释放额度。
-        event = TaskEvent(task_id="t1", kind="unknown_kind")  # type: ignore[arg-type]
-        await scheduler._on_task_event(event)  # 未知事件不释放额度
-
-    @pytest.mark.asyncio
-    async def test_event_listener_tolerates_missing_task(
-        self, store: TaskStore, task_config: TaskConfig, command_bus: Any,
-    ) -> None:
-        scheduler = TaskScheduler(task_config, store, _noop_executor, command_bus=command_bus)
-        event = TaskEvent(task_id="ghost", kind=EventKind.COMPLETED)
-        await scheduler._on_task_event(event)  # 任务不存在 → 记警告返回
-
-    @pytest.mark.asyncio
-    async def test_event_listener_releases_slot_on_completed(
-        self, store: TaskStore, task_config: TaskConfig, command_bus: Any,
-    ) -> None:
-        """收到 COMPLETED 事件 → 从运行集移除并触发补位派发。"""
+        事件监听通道已随"完成通知统一为直接调用"移除（scheduler 不再监听
+        TaskEvent）；本用例直接验证统一入口的额度释放语义。
+        """
         started: list[str] = []
         event = asyncio.Event()
 
@@ -1066,7 +1045,7 @@ class TestSchedulerErrorPaths:
         event.set()
         await asyncio.sleep(0.02)
 
-        await scheduler._on_task_event(TaskEvent(task_id="evt-1", kind=EventKind.COMPLETED))
+        await scheduler.on_task_completed(t1)
         assert "evt-1" not in scheduler._running
 
     @pytest.mark.asyncio

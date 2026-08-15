@@ -10,7 +10,9 @@
 架构要点（v0.1.0 跨进程方案回退后的进程内形态）：
 - 命令路由：逐任务 ID 精准投递，只做本地分发，无传输/序列化层；
 - 事件广播：fire-and-forget，经内部 ``asyncio.Queue`` 解耦，生产方不阻塞在
-  消费方处理上（当前唯一事件监听者：TaskScheduler）。
+  消费方处理上。任务完成通知已统一为执行器直调
+  ``scheduler.on_task_completed``（同步释放并发额度），当前无内部事件
+  生产者/消费者；``publish`` / ``listen_events`` 作为通用机制保留。
 """
 
 from __future__ import annotations

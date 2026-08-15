@@ -136,7 +136,7 @@ class TaskCrud:
             for task in tasks
         ]
 
-    async def _resolve_task_by_id(self, task_id: str) -> tuple[bool, TaskRecord | str]:
+    async def resolve_task(self, task_id: str) -> tuple[bool, TaskRecord | str]:
         """Resolve an exact task ID or a unique ID prefix."""
         task = await self._store.get(task_id)
         if task is not None:
@@ -154,7 +154,7 @@ class TaskCrud:
     ) -> tuple[bool, TaskRecord | str]:
         """Return a task if the caller may view it."""
         logger.debug("查询任务详情：task_id=%s role=%s owner=%s", task_id, caller_role.value, owner)
-        ok, resolved = await self._resolve_task_by_id(task_id)
+        ok, resolved = await self.resolve_task(task_id)
         if not ok:
             return False, resolved
         if caller_role != Role.ADMIN and resolved.owner != owner:
@@ -173,7 +173,7 @@ class TaskCrud:
         priority: int | None = None,
     ) -> tuple[bool, str]:
         """Modify intent, inject an instruction, or change priority."""
-        ok, resolved = await self._resolve_task_by_id(task_id)
+        ok, resolved = await self.resolve_task(task_id)
         if not ok:
             return False, resolved
         if caller_role != Role.ADMIN and resolved.owner != owner:
@@ -209,7 +209,7 @@ class TaskCrud:
         return True, "修改成功" if modified else "无变更"
 
     async def _control_task(self, task_id: str, caller_role: Role, owner: str, action: str) -> tuple[bool, str]:
-        ok, resolved = await self._resolve_task_by_id(task_id)
+        ok, resolved = await self.resolve_task(task_id)
         if not ok:
             return False, resolved
         if caller_role != Role.ADMIN and resolved.owner != owner:
@@ -243,7 +243,7 @@ class TaskCrud:
         self, task_id: str, *, caller_role: Role, owner: str, limit: int = 50,
     ) -> tuple[bool, list | str]:
         """Return execution history if the caller may view the task."""
-        ok, resolved = await self._resolve_task_by_id(task_id)
+        ok, resolved = await self.resolve_task(task_id)
         if not ok:
             return False, resolved
         if caller_role != Role.ADMIN and resolved.owner != owner:

@@ -84,6 +84,13 @@ class AgentExecutor:
         try:
             role_provider = self._make_role_provider(task)
 
+            # 统一完成通知通道：任务进入终态后经 scheduler.on_task_completed
+            # 直接调用（同步释放并发额度 + CRON 重排），不经过事件总线。
+            scheduler = getattr(ctx, "scheduler", None)
+            on_task_done = None
+            if scheduler is not None and callable(getattr(scheduler, "on_task_completed", None)):
+                on_task_done = scheduler.on_task_completed
+
             # 将构造时注入的依赖转发给 AgentLoop。
             loop = AgentLoop(
                 ctx=ctx.ctx,
@@ -92,6 +99,7 @@ class AgentExecutor:
                 on_ask=self._on_ask,
                 role_provider=role_provider,
                 send_final=self._send_final,
+                on_task_done=on_task_done,
                 prompt_manager=self._prompt_manager or ctx.prompt_manager,
                 prompt_service=self._prompt_service or ctx.prompt_service,
                 command_bus=self._command_bus,

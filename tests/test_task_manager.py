@@ -842,7 +842,7 @@ class TestInstantExecution:
             stream_id="qq:g:1", platform="qq",
             reply_stream_id="qq:g:2",
         )
-        await control._dispatch_reply_instant(task, "已处理")
+        await control.dispatch_reply_instant(task, "已处理")
 
         assert sched.enqueued, "Reply instant should be enqueued"
         reply_task = sched.enqueued[0]
@@ -875,7 +875,7 @@ class TestInstantExecution:
             stream_id="qq:g:1", platform="qq",
             reply_stream_id="qq:g:2",
         )
-        await control._dispatch_reply_instant(task, "已处理")
+        await control.dispatch_reply_instant(task, "已处理")
 
         assert sched.enqueued, "Reply instant should be enqueued"
         reply_task = sched.enqueued[0]
@@ -1287,6 +1287,79 @@ class TestHandleUserReplyPrivateStream:
         updated = await real_store.get("t1")
         assert updated is not None
         assert updated.user_reply() == "继续"
+
+
+class TestHandleUserReplyGroupPlannerTask:
+    """群聊流中由 Planner 工具创建的任务（owner=planner:qq:group:xxx）。
+
+    修复点：这类任务无单一委托用户，提问对象是整个群；此前 handle_user_reply
+    只认 owner == "platform:user_id"，群聊 planner 任务永远无法被任何用户回复
+    唤醒，挂起即卡死。现在群内任何人回复都视为有效唤醒。
+    """
+
+    @pytest.mark.asyncio
+    async def test_group_planner_task_wakes_on_any_user_reply(
+        self, real_store: TaskStore, command_bus: Any,
+        mock_ctx: MockCtx, resolver: PermissionResolver,
+        config: MaibotAgentConfig,
+    ) -> None:
+        """群聊 planner 任务：任意用户回复 → 写入 user_reply 并唤醒。"""
+        await real_store.init()
+        sched = FakeScheduler()
+        control = TaskControl(
+            store=real_store, scheduler=sched,
+            command_bus=command_bus, executor_factory=MagicMock(),
+            config=config, prompt_manager=None,
+            prompt_service=None, ctx=mock_ctx,
+        )
+        task = make_task(
+            "g1", owner="planner:qq:group:g1",
+            stream_id="qq:group:g1", platform="qq",
+            status=TaskStatus.WAITING_INPUT,
+        )
+        await real_store.save(task)
+
+        await control.handle_user_reply(
+            stream_id="qq:group:g1",
+            user_id="10001",
+            reply="好的",
+        )
+
+        updated = await real_store.get("g1")
+        assert updated is not None
+        assert updated.user_reply() == "好的"
+
+    @pytest.mark.asyncio
+    async def test_private_planner_task_not_woken_by_stranger(
+        self, real_store: TaskStore, command_bus: Any,
+        mock_ctx: MockCtx, resolver: PermissionResolver,
+        config: MaibotAgentConfig,
+    ) -> None:
+        """对照：私聊流（无 :group:）不启用 planner 群匹配，陌生人回复不唤醒。"""
+        await real_store.init()
+        sched = FakeScheduler()
+        control = TaskControl(
+            store=real_store, scheduler=sched,
+            command_bus=command_bus, executor_factory=MagicMock(),
+            config=config, prompt_manager=None,
+            prompt_service=None, ctx=mock_ctx,
+        )
+        task = make_task(
+            "p1", owner="qq:123",
+            stream_id="qq:123", platform="qq",
+            status=TaskStatus.WAITING_INPUT,
+        )
+        await real_store.save(task)
+
+        await control.handle_user_reply(
+            stream_id="qq:123",
+            user_id="999",
+            reply="你谁",
+        )
+
+        updated = await real_store.get("p1")
+        assert updated is not None
+        assert updated.user_reply() == ""  # 未写入，未唤醒
 
 
 class TestAskCallback:

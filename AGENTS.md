@@ -20,11 +20,16 @@ Essential 层仅 `ask_user`（始终可见）；Discoverable 层按角色过滤�
 
 **命令总线与调度链**。任务执行需要跨组件协作（注入指令、唤醒、取消、暂停），故有
 TaskCommandBus（`bus/command_bus.py`，进程内命令路由表 + 事件队列，无传输/序列化层）
-路由命令 INJECT_INSTRUCTION / RESUME_REPLY / CANCEL / PAUSE / RESUME 与事件
-COMPLETED / FAILED / CANCELLED。调度链：TaskManager（门面）→ TaskCrud /
-TaskControl（`core/usecases/`）→ ExecutorFactory → InstantExecutor（进程内同步）/ AgentExecutor
-（AgentLoop 最大 30 轮，经 `ctx.llm.generate_with_tools(model=planner, timeout_ms=240000)`
-调用 LLM）。主 Agent 还可经 `ask_subagent` / `ask_subagents` 工具派发进程内子 Agent
+路由命令 INJECT_INSTRUCTION / RESUME_REPLY / CANCEL / PAUSE / RESUME（事件
+COMPLETED / FAILED / CANCELLED 已随「完成通知统一为直接调用」退为预留机制，见下）。
+调度链：TaskManager（门面）→ TaskCrud / TaskControl（`core/usecases/`）→ ExecutorFactory
+→ InstantExecutor（进程内同步）/ AgentExecutor（AgentLoop 最大 30 轮，经
+`ctx.llm.generate_with_tools(model=planner, timeout_ms=240000)` 调用 LLM）。
+任务进入终态的完成通知**统一走直接调用** `scheduler.on_task_completed`：InstantExecutor
+经 `complete_and_notify` / `fail_task`，AgentExecutor 把 `on_task_done` 回调绑定到
+`ctx.scheduler.on_task_completed` 注入 AgentLoop——同步释放并发额度 + CRON 重排，
+不经过事件总线（时序可预期；`TaskCommandBus.publish / listen_events` 保留为预留
+机制，当前无消费者）。主 Agent 还可经 `ask_subagent` / `ask_subagents` 工具派发进程内子 Agent
 （`executor/subagent.py` 的 SubAgentLoop，并行工具轮 + 答案回传主循环继续判断）。
 执行期上下文经 `executor/context.py` 的 `current_task` ContextVar 传递（唯一 set 方
 AgentExecutor.execute，finally reset 防并发泄漏），`make_role_provider` 按任务 owner/stream_id
@@ -70,7 +75,7 @@ agent_system / title / polish / planner_board / injection / context_note / subag
 - `core/`：编排层（TaskScheduler / TaskManager 门面 + core/usecases/ 下沉 TaskControl 与
   TaskCrud）
 - `domain/`：领域模型与持久化，TaskRecord 状态机 + TaskStore + Recovery + StatusFormatter
-- `executor/`：执行层——AgentLoop 执行引擎（agent_loop.py）+ current_task 执行上下文（context.py）+ ExecutorFactory 按级分发 InstantExecutor（进程内）/ AgentExecutor
+- `executor/`：执行层——AgentLoop 执行引擎（agent_loop.py）+ current_task 执行上下文（context.py）+ ExecutorFactory 按级分发 InstantExecutor（进程内）/ AgentExecutor + 工具装配（tool_registrar.py，TaskManager.setup() 委托其注册全部 Agent 工具）
 - `tools/mcp/`：MCP 工具提供方，MCPConnection（stdio/http/sse）+ MCPManager + presets（内置 fetch/exa 预设）
 - `prompt/`：提示词系统，manager / service / base + builders/（7）+ templates/（7 中文模板）
 - `tools/`：工具系统三通道（agent 循环工具（含子 Agent 工具 `subagent_tool.py`）/ planner @Tool 工厂 / synthetic 发现工具）+ 发送工具共用实现 `tools/send_message.py` + MCP 工具提供方（tools/mcp/）

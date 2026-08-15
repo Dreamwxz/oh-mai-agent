@@ -63,7 +63,7 @@ META_INJECT_QUEUE = "_inject_queue"                     # list[str] — 待注�
 META_USER_REPLY = "_user_reply"                         # str — ask_user 挂起期间收到的用户回复
 META_COOP_PAUSED = "_coop_paused"                       # bool — 协作暂停标记（调度器与 AgentLoop 双方维护，暂停中跳过超时计时）
 META_PAUSED_BY_STOP = "_paused_by_stop"                 # bool — 插件关闭时被暂停的标记（恢复机制仅记录）
-META_IS_REPLY = "_is_reply"                             # bool — 回复投递任务标记（_dispatch_reply_instant 创建时设置）
+META_IS_REPLY = "_is_reply"                             # bool — 回复投递任务标记（dispatch_reply_instant 创建时设置）
 META_LAST_HISTORY_ID = "_last_history_id"               # int — 持久化历史水位（append_history 返回的自增 id）
 META_ERROR = "_error"                                   # str — 失败原因（发送失败消息时读取）
 META_RECOVERED_FROM_RUNNING = "_recovered_from_running" # bool — 重启时由 RUNNING 降级重排的标记（区分“恢复重排”与“正常排队”）
@@ -395,7 +395,7 @@ class TaskRecord:
     # ── 回复任务标记 ──
 
     def mark_as_reply(self) -> None:
-        """标记本任务为回复投递任务（_dispatch_reply_instant 创建时设置）。"""
+        """标记本任务为回复投递任务（dispatch_reply_instant 创建时设置）。"""
         self.metadata[META_IS_REPLY] = True
 
     def is_reply_task(self) -> bool:

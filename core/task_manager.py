@@ -11,12 +11,13 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..executor.context import current_task, make_role_provider
 from ..executor.instant import ReplySender
 from ..config import MaibotAgentConfig
 from ..executor import ExecutionContext, ExecutorFactory, make_exec_ctx
+from ..executor.tool_registrar import ToolWiring, register_agent_tools
 from ..domain.status_formatter import StatusFormatter
 from ..permission import PermissionResolver, Role
 from ..prompt.manager import PromptManager
@@ -25,14 +26,10 @@ from .usecases.task_crud import TaskCrud
 from .usecases.task_control import TaskControl
 from ..domain.task_record import TaskLevel, TaskRecord, TaskStatus, TriggerType
 from ..domain.task_store import TaskStore
-from ..tools.agent.ask_tool import build_ask_tool
-from ..tools.agent.file_tools import build_file_tools
-from ..tools.agent.info_tools import build_info_tools
-from ..tools.agent.plugin_api_tools import refresh_plugin_api_tools
-from ..tools.agent.shell_tools import build_shell_tools
-from ..tools.send_message import build_send_tool
-from ..tools.agent.subagent_tool import build_subagent_tool, build_subagents_tool
-from ..tools.registry import ToolDefinition, ToolRegistry
+
+if TYPE_CHECKING:
+    # 仅类型注解：core 层不依赖 tools 实现
+    from ..tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -128,7 +125,7 @@ class TaskManager:
         self._executor_factory = ExecutorFactory(
             registry=registry,
             on_ask=self._ask_callback,
-            send_final=self._dispatch_reply_instant,
+            send_final=self.dispatch_reply_instant,
             prompt_manager=prompt_manager,
             command_bus=command_bus,
             resolver=self._resolver,
@@ -167,105 +164,28 @@ class TaskManager:
     async def setup(self) -> None:
         """初始化任务管理器。
 
-        1. 注册任务管理工具（list_my_tasks / create_subtask / inject_task）。
-        2. 注册信息工具、文件工具、ask_user 工具、跨插件 API 工具。
-        3. 初始化 AgentLoop 工厂并绑定到调度器。
+        工具装配（任务管理/信息/文件/ask/send/api/子 Agent/命令）已下沉到
+        executor 层的 ``ToolRegistrar``（``executor/tool_registrar.py``）——
+        core 编排层不再直接依赖具体工具工厂，只提供装配所需的运行时句柄。
         """
-        # ── 1. 任务管理工具 ──────────────────────────────────────────
-        for tool in self._build_task_mgmt_tools():
-            self._registry.register(tool)
-
-        # ── 2. 信息工具 ──────────────────────────────────────────────
-        for tool in build_info_tools(self._ctx, search_max_results=self._config.search.max_results):
-            self._registry.register(tool)
-
-        # ── 3. 文件工具 ──────────────────────────────────────────────
-        user_workspace = self._data_dir / "files"
-        # role_provider 在 AgentLoop 构造时按任务绑定；此处注册阶段仅定义工具
-        file_tools = build_file_tools(
-            self._ctx,
-            user_workspace=user_workspace,
-            admin_open=True,
-            role_provider=lambda: self._current_task_role(),
-        )
-        for tool in file_tools:
-            self._registry.register(tool)
-
-        # ── 4. ask_user 工具 ─────────────────────────────────────────
-        # on_ask 回调与 AgentLoop 共用 self._ask_callback
-        # 此处注册的 ask_user 工具 handler 由 ask_tool 内部创建，
-        # 实际挂起由 AgentLoop._handle_ask_user 处理。
-        # 但 ask_tool 的 handler 调用 ask_callback(stream_id, question)，
-        # 这与 AgentLoop 的 on_ask 一致 —— 两者都指向 _ask_callback。
-        # 说明: 两个 ask_user 路径（AgentLoop 内置 + 注册到 registry）
-        # 都通过同一个 _ask_callback 发消息；挂起由 AgentLoop 内部处理。
-        ask_tools = build_ask_tool(
-            self._ctx,
-            ask_callback=self._ask_callback,
-            min_role=Role.USER,
-        )
-        for tool in ask_tools:
-            self._registry.register(tool)
-
-        # ── 5. send_message 工具（升级版） ──────────────────────────
-        # send_polished 回调绑定 ReplySender.send_polished（润色 + 分割 + 重试），
-        # relay_from（转达委托人）由 send_message 工具参数透传
-        async def _send_polished(
-            text: str, stream_id: str, *, relay_from: str | None = None,
-        ) -> None:
-            await self._sender.send_polished(text, stream_id, relay_from=relay_from)
-
-        send_msg_tool = build_send_tool(
-            self._ctx,
-            send_polished=_send_polished,
-            min_role=Role.USER,
+        # 注：role_provider 与 get_current_task 由本类提供（当前任务上下文
+        # 解析是编排层能力），工具工厂仅消费这些回调。
+        wiring = ToolWiring(
+            ctx=self._ctx,
+            registry=self._registry,
+            config_getter=lambda: self._config,
+            data_dir=self._data_dir,
             prompt_service=self._prompt_service,
+            store=self._store,
+            sfmt=self._sfmt,
+            role_provider=self._current_task_role,
+            ask_callback=self._ask_callback,
+            create_task=self.create_task,
+            handle_injection=self.handle_injection,
+            get_current_task=lambda: current_task.get(),
+            sender=self._sender,
         )
-        self._registry.register(send_msg_tool)
-
-        # ── 6. 跨插件 API 工具 ──────────────────────────────────────
-        try:
-            ctx_api = getattr(self._ctx, "api", None)
-            if ctx_api is not None:
-                api_tools = await refresh_plugin_api_tools(ctx_api)
-                for tool in api_tools:
-                    self._registry.register(tool)
-        except Exception:
-            logger.warning("扫描插件 API 工具失败", exc_info=True)
-
-        # ── 7. 子 Agent 工具 ─────────────────────────────────────────
-        # config_getter 为 lambda 读取当前 self._config.subagent 引用，
-        # update_config 热更新后新值立即生效（无需重新注册）。
-        if self._config.subagent.enabled:
-            for tool in (
-                build_subagent_tool(
-                    self._ctx,
-                    self._registry,
-                    self._prompt_service,
-                    config_getter=lambda: self._config.subagent,
-                    role_provider=lambda: self._current_task_role(),
-                ),
-                build_subagents_tool(
-                    self._ctx,
-                    self._registry,
-                    self._prompt_service,
-                    config_getter=lambda: self._config.subagent,
-                    role_provider=lambda: self._current_task_role(),
-                ),
-            ):
-                self._registry.register(tool)
-
-        # ── 8. 命令执行工具 ─────────────────────────────────────────
-        # config_getter 每次调用读取，timeout / 输出上限热更新立即生效；
-        # 工具仅 admin 可见（min_role + role_provider 双重门控）
-        if self._config.shell.enabled:
-            for tool in build_shell_tools(
-                self._ctx,
-                config_getter=lambda: self._config.shell,
-                role_provider=lambda: self._current_task_role(),
-            ):
-                self._registry.register(tool)
-
+        await register_agent_tools(wiring)
         logger.info(
             "TaskManager 初始化完成，已注册 %d 个工具",
             len(self._registry.all_names()),
@@ -336,9 +256,6 @@ class TaskManager:
             stream_id=stream_id, limit=limit,
         )
 
-    async def _resolve_task_by_id(self, task_id: str) -> tuple[bool, TaskRecord | str]:
-        return await self._crud._resolve_task_by_id(task_id)
-
     async def get_task(
         self,
         task_id: str,
@@ -397,8 +314,8 @@ class TaskManager:
 
     # ── instant / agent 执行 ─────────────────────────────────────────
 
-    async def _dispatch_reply_instant(self, task: TaskRecord, text: str) -> None:
-        return await self._control._dispatch_reply_instant(task, text)
+    async def dispatch_reply_instant(self, task: TaskRecord, text: str) -> None:
+        return await self._control.dispatch_reply_instant(task, text)
 
     async def execute_instant(self, task: TaskRecord) -> None:
         return await self._control.execute_instant(task)
@@ -514,20 +431,3 @@ class TaskManager:
             logger.info("已向聊天流 %s 发送 ask_user 提问：%s", stream_id, question[:80])
         except Exception:
             logger.exception("向聊天流 %s 发送 ask_user 提问失败", stream_id)
-
-    # ═══════════════════════════════════════════════════════════════════
-    # 内部：任务管理工具构建
-    # ═══════════════════════════════════════════════════════════════════
-
-    def _build_task_mgmt_tools(self) -> list[ToolDefinition]:
-        """内部任务管理工具（list_my_tasks / create_subtask / inject_task）。"""
-        from ..tools.agent.task_mgmt import build_task_mgmt_tools
-
-        return build_task_mgmt_tools(
-            self._store,
-            self._sfmt,
-            create_task=self.create_task,
-            handle_injection=self.handle_injection,
-            get_current_task=lambda: current_task.get(),
-            get_current_task_role=self._current_task_role,
-        )

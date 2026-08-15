@@ -17,7 +17,7 @@ import pytest
 import pytest_asyncio
 from conftest import MockCtx, make_task
 from oh_mai_agent.executor.agent_loop import AgentLoop
-from oh_mai_agent.bus.messages import CommandKind, EventKind, TaskCommand
+from oh_mai_agent.bus.messages import CommandKind, TaskCommand
 from oh_mai_agent.permission import Role
 from oh_mai_agent.prompt.base import PromptContext
 from oh_mai_agent.prompt.builders.agent_system import AgentSystemBuilder
@@ -88,20 +88,20 @@ class TestAgentLoopBasic:
         prompt_service: Any, command_bus: Any, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         task = make_task("cancel-store-error", level=TaskLevel.AGENT)
-        published: list[Any] = []
+        done: list[TaskRecord] = []
 
         async def failing_get(task_id: str) -> TaskRecord | None:
             raise RuntimeError("database unavailable")
 
-        async def record_publish(event: Any) -> None:
-            published.append(event)
+        async def record_done(t: TaskRecord) -> None:
+            done.append(t)
 
         monkeypatch.setattr(store, "get", failing_get)
-        monkeypatch.setattr(command_bus, "publish", record_publish)
         loop = AgentLoop(
             ctx=mock_ctx, registry=registry, store=store,
             command_bus=command_bus, role_provider=lambda: Role.ADMIN,
             prompt_service=prompt_service,
+            on_task_done=record_done,
         )
 
         async def cancel_during_llm(*args: Any, **kwargs: Any) -> dict[str, Any]:
@@ -114,7 +114,8 @@ class TestAgentLoopBasic:
         await loop.run(task)
 
         assert task.status == TaskStatus.CANCELLED
-        assert [event.kind for event in published] == [EventKind.CANCELLED]
+        # 统一完成通知通道：取消收尾经 on_task_done 回调通知（不再发布总线事件）
+        assert done == [task]
 
     @pytest.mark.asyncio
     async def test_cancel_after_timeout_preserves_failed_state(
@@ -983,14 +984,19 @@ class TestF2SendFinalWindow:
         self, store: TaskStore, mock_ctx: MockCtx, registry: ToolRegistry,
         prompt_service: Any, command_bus: Any,
     ) -> None:
-        """send_final 期间收到 CANCEL → 任务保持 CANCELLED，不发布 COMPLETED。"""
+        """send_final 期间收到 CANCEL → 任务保持 CANCELLED，完成通知携带取消状态。"""
         task = make_task("cancel-send-final", level=TaskLevel.AGENT, status=TaskStatus.RUNNING)
         await store.save(task)
-        published: list[Any] = []
+        done: list[TaskRecord] = []
+
+        async def record_done(t: TaskRecord) -> None:
+            done.append(t)
+
         loop = AgentLoop(
             ctx=mock_ctx, registry=registry, store=store,
             command_bus=command_bus, role_provider=lambda: Role.ADMIN,
             prompt_service=prompt_service,
+            on_task_done=record_done,
         )
 
         async def cancel_in_send_final(t: TaskRecord, text: str) -> None:
@@ -999,10 +1005,6 @@ class TestF2SendFinalWindow:
                 TaskCommand(task_id=t.id, kind=CommandKind.CANCEL),
             )
 
-        async def record_publish(event: Any) -> None:
-            published.append(event)
-
-        command_bus.publish = record_publish  # type: ignore[method-assign]
         mock_ctx.llm.set_tool_response("done", [])
         loop._send_final = cancel_in_send_final  # type: ignore[assignment]
 
@@ -1011,7 +1013,9 @@ class TestF2SendFinalWindow:
         persisted = await store.get(task.id)
         assert persisted is not None
         assert persisted.status == TaskStatus.CANCELLED
-        assert not any(e.kind == EventKind.COMPLETED for e in published)
+        # 只通知一次，且通知的是 CANCELLED（不是 COMPLETED）
+        assert len(done) == 1
+        assert done[0].status == TaskStatus.CANCELLED
 
     @pytest.mark.asyncio
     async def test_timeout_during_send_final_preserves_failed(

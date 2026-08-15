@@ -17,7 +17,7 @@ from typing import Any
 from croniter import croniter
 
 from ..config import TaskConfig
-from ..bus.messages import CommandKind, TaskCommand, EventKind
+from ..bus.messages import CommandKind, TaskCommand
 from ..domain.task_record import TaskLevel, TaskRecord, TaskStatus, TriggerType
 
 logger = logging.getLogger(__name__)
@@ -50,8 +50,9 @@ class TaskScheduler:
             store: 任务持久化存储（TaskStore 接口契约）。
             executor: 任务实际执行回调（可选；可在构造后经 ``set_executor``
                 绑定，用于打破与 TaskManager 的构造环）。
-            command_bus: TaskCommandBus 实例。调度器通过总线事件
-               （TaskEvent COMPLETED/FAILED）释放并发额度。
+            command_bus: TaskCommandBus 实例。调度器通过命令通道接收
+                CANCEL / PAUSE / RESUME 等控制意图（完成通知不走总线，
+                统一经 ``on_task_completed`` 直接调用，见该方法的说明）。
         """
         self._config = config
         self._store = store
@@ -62,7 +63,6 @@ class TaskScheduler:
         self._pending: list[TaskRecord] = []
 
         self._check_task: asyncio.Task[Any] | None = None
-        self._event_listener_task: asyncio.Task[Any] | None = None
         self._stop_event = asyncio.Event()
 
     def set_executor(self, executor: Callable[[TaskRecord], Awaitable[None]]) -> None:
@@ -90,22 +90,18 @@ class TaskScheduler:
         """启动调度器。
 
         启动后台轮询循环，每秒检查 SCHEDULED 任务是否到点以及运行中任务是否超时。
-        若提供 command_bus，同时启动事件监听（TaskEvent COMPLETED/FAILED）。
         """
         if self._check_task is not None:
             logger.debug("调度器已在运行，跳过重复启动")
             return
         self._stop_event.clear()
         self._check_task = asyncio.create_task(self._check_loop())
-        self._event_listener_task = asyncio.create_task(
-            self._command_bus.listen_events(self._on_task_event)
-        )
         logger.info("调度器已启动（max_concurrent=%d）", self._config.max_concurrent_tasks)
 
     async def stop(self) -> None:
         """停止调度器。
 
-        取消后台检查循环和事件监听，把所有 RUNNING 任务标记为 PAUSED 落盘。
+        取消后台检查循环，把所有 RUNNING 任务标记为 PAUSED 落盘。
         """
         logger.info("调度器正在停止...")
 
@@ -118,15 +114,6 @@ class TaskScheduler:
             except asyncio.CancelledError:
                 pass
             self._check_task = None
-
-        # 1.5) 停止事件监听
-        if self._event_listener_task:
-            self._event_listener_task.cancel()
-            try:
-                await self._event_listener_task
-            except asyncio.CancelledError:
-                pass
-            self._event_listener_task = None
 
         # 2) 把所有 RUNNING 任务标记为 PAUSED
         for tid in list(self._running):
@@ -342,17 +329,18 @@ class TaskScheduler:
     # ── 调度核心 ──────────────────────────────────────────────────────
 
     async def on_task_completed(self, task: TaskRecord) -> None:
-        """任务结束回调（直接调用路径，向后兼容）。
+        """任务结束通知（**唯一**完成入口）。
 
-        从 _running 集合中移除，释放并发额度，触发下一 pending 任务启动。
-
-        Args:
-            task: 已完成（终态）的任务。
+        由各执行器在任务进入终态后直接调用（InstantExecutor 经
+        ``complete_and_notify`` / ``fail_task``，AgentExecutor 注入
+        ``on_task_done`` 回调绑定本方法）——同步释放并发额度、
+        对成功的 CRON 任务计算下次触发时间。完成通知不走事件总线，
+        保证"任务结束 → 额度释放 → 下一任务启动"的时序可预期。
         """
         await self._do_on_task_completed(task)
 
     async def _do_on_task_completed(self, task: TaskRecord) -> None:
-        """共享完成处理逻辑（直接回调 + 事件监听共用）。
+        """共享完成处理逻辑（``on_task_completed`` 唯一入口）。
 
         从 _running 集合中移除，释放并发额度。对于成功的 CRON 任务，
         计算下次触发时间并重新调度（循环执行）。
@@ -385,23 +373,6 @@ class TaskScheduler:
             logger.warning(
                 "重新调度 cron 任务 %s 失败", task.id, exc_info=True
             )
-
-    async def _on_task_event(self, event: Any) -> None:
-        """事件总线监听器 — 处理 TaskEvent(COMPLETED/FAILED) 释放并发额度。"""
-        from ..bus.messages import EventKind, TaskEvent
-
-        if not isinstance(event, TaskEvent):
-            return
-        if event.kind not in (EventKind.COMPLETED, EventKind.FAILED, EventKind.CANCELLED):
-            return
-
-        task = await self._store.get(event.task_id)
-        if task is None:
-            logger.warning(
-                "收到 TaskEvent %s，但任务 %s 不存在", event.kind.value, event.task_id,
-            )
-            return
-        await self._do_on_task_completed(task)
 
     async def _try_start(self, task: TaskRecord) -> str:
         """检查额度后启动任务。

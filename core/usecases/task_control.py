@@ -46,7 +46,7 @@ class TaskControl:
         """Replace the configuration used when creating execution contexts."""
         self._config = config
 
-    async def _dispatch_reply_instant(self, task: TaskRecord, text: str) -> None:
+    async def dispatch_reply_instant(self, task: TaskRecord, text: str) -> None:
         """Persist and enqueue a reply as an instant task."""
         reply_task = new_task_record(
             title=f"Reply: {task.title[:60]}",
@@ -89,6 +89,10 @@ class TaskControl:
         """Match a user reply to a waiting task and resume it."""
         platform = stream_id.split(":", 1)[0] if ":" in stream_id else ""
         full_owner = f"{platform}:{user_id}"
+        # 群聊中由 Planner 工具创建的任务 owner 为 "planner:{stream_id}"（无单一
+        # 委托用户，提问对象是整个群）；这类任务视作"群内任何人回复都有效"。
+        # （tools/planner/task_tools.py:_planner_owner 的群聊语义即如此。）
+        planner_owner = f"planner:{stream_id}" if ":group:" in stream_id else None
 
         tasks = await self._store.list(
             status=TaskStatus.WAITING_INPUT,
@@ -96,7 +100,7 @@ class TaskControl:
             limit=50,
         )
         for task in tasks:
-            if task.owner != full_owner:
+            if task.owner != full_owner and task.owner != planner_owner:
                 continue
             fresh = await self._store.get(task.id)
             if fresh is None:

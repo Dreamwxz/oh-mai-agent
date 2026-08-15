@@ -101,6 +101,21 @@ class MaibotAgentPlugin(MaiBotPlugin):
         await apply_config_update(self, scope, config_data, version)
 
     # ═══════════════════════════════════════════════════════════════════════
+    # 组件公共访问器 — 供命令层 / 外部模块读取运行时组件
+    # （运行期消费方必须经公共接口访问；lifecycle.py 组装根仍直接操作私有字段）
+    # ═══════════════════════════════════════════════════════════════════════
+
+    @property
+    def resolver(self) -> Any:
+        """权限解析器（PermissionResolver）。on_load 完成后可用；未初始化返回 None。"""
+        return getattr(self, "_resolver", None)
+
+    @property
+    def task_manager(self) -> Any:
+        """任务管理器（TaskManager）。on_load 完成后可用；未初始化返回 None。"""
+        return getattr(self, "_task_manager", None)
+
+    # ═══════════════════════════════════════════════════════════════════════
     # 内部：LLM 标题生成
     # ═══════════════════════════════════════════════════════════════════════
 

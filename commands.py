@@ -63,7 +63,7 @@ def resolve_caller(plugin: "MaibotAgentPlugin", **kwargs: Any) -> tuple[Role, st
     # 群聊判定：stream_id 含 ":group:" 段（格式 platform:group:group_id）
     is_group = ":group:" in stream_id
 
-    role = plugin._resolver.resolve_role(
+    role = plugin.resolver.resolve_role(
         platform=platform,
         user_id=user_id,
         stream_id=stream_id,
@@ -83,7 +83,7 @@ async def cmd_reply(plugin: "MaibotAgentPlugin", stream_id: str, response: str) 
     与静默掉包检测的可靠性保障，但不写入 MaiBot 上下文。
     """
     try:
-        await plugin._task_manager.sender.send_raw(response, stream_id)
+        await plugin.task_manager.sender.send_raw(response, stream_id)
     except Exception:
         plugin.ctx.logger.warning(
             "命令响应发送失败 stream=%s: %s", stream_id, response[:50], exc_info=True
@@ -109,7 +109,7 @@ async def cmd_create(plugin: "MaibotAgentPlugin", **kwargs: Any) -> tuple[bool, 
         await cmd_reply(plugin, stream_id, reply)
         return False, reply, 2
 
-    ok, result = await plugin._task_manager.create_task(
+    ok, result = await plugin.task_manager.create_task(
         intent=intent,
         owner=owner,
         platform=platform,
@@ -164,7 +164,7 @@ async def cmd_list(plugin: "MaibotAgentPlugin", **kwargs: Any) -> tuple[bool, st
     if all_flag and role == Role.ADMIN:
         owner = ""
 
-    tasks = await plugin._task_manager.list_tasks(
+    tasks = await plugin.task_manager.list_tasks(
         caller_role=role,
         owner=owner,
         status=status,
@@ -203,7 +203,7 @@ async def cmd_status(plugin: "MaibotAgentPlugin", **kwargs: Any) -> tuple[bool, 
         return False, reply, 2
 
     # 尝试完整 ID 或前缀匹配
-    ok, result = await plugin._task_manager.get_task(
+    ok, result = await plugin.task_manager.get_task(
         task_id=task_id,
         caller_role=role,
         owner=owner,
@@ -244,7 +244,7 @@ async def cmd_cancel(plugin: "MaibotAgentPlugin", **kwargs: Any) -> tuple[bool, 
         await cmd_reply(plugin, stream_id, reply)
         return False, reply, 2
 
-    ok, msg = await plugin._task_manager.cancel_task(
+    ok, msg = await plugin.task_manager.cancel_task(
         task_id=task_id,
         caller_role=role,
         owner=owner,
@@ -276,7 +276,7 @@ async def cmd_history(plugin: "MaibotAgentPlugin", **kwargs: Any) -> tuple[bool,
         await cmd_reply(plugin, stream_id, reply)
         return False, reply, 2
 
-    ok, result = await plugin._task_manager.task_history(
+    ok, result = await plugin.task_manager.task_history(
         task_id=task_id,
         caller_role=role,
         owner=owner,
@@ -324,7 +324,7 @@ async def cmd_ask(plugin: "MaibotAgentPlugin", **kwargs: Any) -> tuple[bool, str
             return False, reply, 2
         task_id, instruction = parts[0], parts[1]
 
-    ok, msg = await plugin._task_manager.modify_task(
+    ok, msg = await plugin.task_manager.modify_task(
         task_id=task_id,
         caller_role=role,
         owner=owner,

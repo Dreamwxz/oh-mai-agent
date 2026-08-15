@@ -18,6 +18,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from .core.task_manager import TaskManager
+from .domain.status_formatter import StatusFormatter
 from .domain.task_record import TaskRecord, TaskStatus
 from .permission import Role
 
@@ -44,6 +45,36 @@ def _parse_status(status_str: str | None) -> TaskStatus | None:
         return TaskStatus(str(status_str))
     except ValueError:
         return None
+
+
+def _task_detail(task: TaskRecord) -> dict[str, Any]:
+    """构建跨插件 API 的 task 详情 DTO。
+
+    只暴露稳定、用户可见的字段，**不透传** ``TaskRecord.to_dict()`` 的持久化
+    内部结构（``_status_log`` 审计日志、``metadata`` 内部协作键如待注入队列/
+    用户回复/协作暂停标记等属于实现细节，不构成对外契约）。领域模型
+    后续演进不会破坏跨插件 API 的响应结构。
+    """
+    sfmt = StatusFormatter()
+    status, ts = task.status_info()
+    return {
+        "id": task.id,
+        "title": task.title,
+        "intent": task.intent,
+        "level": task.level.value,
+        "status": task.status.value,
+        "format_status": sfmt.format(status, ts),
+        "owner": task.owner,
+        "stream_id": task.stream_id,
+        "platform": task.platform,
+        "reply_stream_id": task.reply_stream_id,
+        "trigger_type": task.trigger_type.value,
+        "priority": task.priority,
+        "created_at": task.created_at.isoformat(),
+        "updated_at": task.updated_at.isoformat(),
+        "started_at": task.started_at.isoformat() if task.started_at else None,
+        "scheduled_at": task.scheduled_at.isoformat() if task.scheduled_at else None,
+    }
 
 
 def _wrap_handler(
@@ -182,7 +213,7 @@ def build_api_handlers(task_manager: TaskManager) -> list[dict[str, Any]]:
         )
 
     def _get_map_ok(result: TaskRecord) -> dict[str, Any]:
-        return {"success": True, "task": result.to_dict()}
+        return {"success": True, "task": _task_detail(result)}
 
     # ── cancel ──────────────────────────────────────────────────────────
     def _cancel_extract(kwargs: dict[str, Any]) -> dict[str, Any]:
