@@ -50,8 +50,9 @@ def build_search_users_handler(ctx: Any, config: Any) -> Callable[..., Any]:
                 # ── 人物画像查找（精确名称匹配） ──────────────
                 try:
                     pid_result = await ctx.person.get_id_by_name(keyword)
-                    # SDK 返回 person_id 字符串；同时兼容 dict 形式
-                    if isinstance(pid_result, str):
+                    # SDK 返回 person_id 字符串；同时兼容 dict 形式。
+                    # 真实宿主对查无此名返回空串 ""，须判空避免假命中
+                    if isinstance(pid_result, str) and pid_result:
                         persons.append({"person_id": pid_result, "matched_by": "exact_name"})
                     elif isinstance(pid_result, dict) and pid_result.get("person_id"):
                         persons.append(

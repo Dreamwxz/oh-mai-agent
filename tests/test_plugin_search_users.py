@@ -87,6 +87,23 @@ class TestToolSearchUsersMultiSource:
         assert result["persons"][0]["matched_by"] == "exact_name"
 
     @pytest.mark.asyncio
+    async def test_empty_string_person_id_not_appended(
+        self, plugin_with_ctx: MaibotAgentPlugin, plugin_ctx: MockCtx,
+    ) -> None:
+        """get_id_by_name 返回空串（真实宿主查无此名的形态）—— persons 不产生假命中。"""
+        plugin_ctx._chat_streams = []
+        plugin_ctx._person_data["空格"] = ""
+
+        with patch.object(type(plugin_with_ctx), "config", new_callable=PropertyMock) as mock_cfg:
+            mock_cfg.return_value = MaibotAgentConfig()
+            result = await plugin_with_ctx._tool_search_users(keyword="空格")
+
+        assert result["success"] is True
+        assert result["count"] == 0
+        assert result["streams"] == []
+        assert result["persons"] == []
+
+    @pytest.mark.asyncio
     async def test_keyword_not_found_anywhere(
         self, plugin_with_ctx: MaibotAgentPlugin, plugin_ctx: MockCtx,
     ) -> None:
