@@ -27,6 +27,8 @@ from ..tools.agent.shell_tools import build_shell_tools
 from ..tools.agent.subagent_tool import build_subagent_tool, build_subagents_tool
 from ..tools.agent.task_mgmt import build_task_mgmt_tools
 from ..tools.send_message import build_send_tool
+from .context import current_task
+from .instant import _resolve_relay
 
 logger = logging.getLogger(__name__)
 
@@ -116,18 +118,26 @@ async def register_agent_tools(w: ToolWiring) -> None:
         w.registry.register(tool)
 
     # ── 5. send_message 工具 ────────────────────────────────────────
-    # send_polished 绑定 ReplySender.send_polished（润色 + 分割 + 重试），
-    # relay_from（转达委托人）由 send_message 工具参数透传。
+    # send_polished 绑定 ReplySender.send_polished（润色 + 分割 + 重试）；
+    # resolve_relay 注入自动转达判定：目标用户 ≠ 当前任务发起人 → 点名委托人
+    # （无任务上下文时按本人发言，如 Planner 版）。
     async def _send_polished(
         text: str, stream_id: str, *, relay_from: str | None = None,
     ) -> None:
         await w.sender.send_polished(text, stream_id, relay_from=relay_from)
+
+    async def _resolve_send_relay(stream_id: str) -> str | None:
+        task = current_task.get()
+        if task is None:
+            return None
+        return await _resolve_relay(w.ctx, task.owner or "", stream_id)
 
     send_msg_tool = build_send_tool(
         w.ctx,
         send_polished=_send_polished,
         min_role=Role.USER,
         prompt_service=w.prompt_service,
+        resolve_relay=_resolve_send_relay,
     )
     w.registry.register(send_msg_tool)
 

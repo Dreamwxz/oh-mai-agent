@@ -13,7 +13,12 @@ from conftest import MockCtx, make_task
 from oh_mai_agent.config import MaibotAgentConfig
 from oh_mai_agent.domain.task_record import TaskLevel, TaskStatus, TriggerType
 from oh_mai_agent.executor.base import ExecutionContext, complete_and_notify
-from oh_mai_agent.executor.instant import InstantExecutor, ReplySender, fail_task
+from oh_mai_agent.executor.instant import (
+    InstantExecutor,
+    ReplySender,
+    _resolve_auto_relay,
+    fail_task,
+)
 from oh_mai_agent.prompt.builders.context_note import ContextNoteBuilder
 from oh_mai_agent.prompt.manager import PromptManager
 from oh_mai_agent.prompt.service import PromptService
@@ -553,3 +558,181 @@ class TestFailTaskBranches:
         persisted = await store.get("ft-3")
         assert persisted is not None
         assert persisted.status == TaskStatus.FAILED
+
+
+def _make_stream(
+    session_id: str,
+    *,
+    user_id: str = "",
+    user_nickname: str = "",
+    chat_type: str = "private",
+) -> dict:
+    """构造宿主序列化格式的流对象（对齐 _serialize_stream）。"""
+    return {
+        "session_id": session_id,
+        "stream_id": session_id,
+        "platform": "qq",
+        "user_id": user_id,
+        "user_nickname": user_nickname,
+        "group_id": "",
+        "group_name": "",
+        "is_group_session": chat_type == "group",
+        "chat_type": chat_type,
+    }
+
+
+class TestAutoRelay:
+    """自动转达判定：私聊目标且目标用户 ≠ 任务发起人 → 转达（群目标维持现状）。"""
+
+    @pytest.mark.asyncio
+    async def test_private_target_different_user_relays(self) -> None:
+        """发起人 qq:10001 的任务回复到 qq:20002（私聊他人）→ 转达，点名发起人昵称。"""
+        ctx = MockCtx()
+        ctx._chat_streams = [
+            _make_stream("qq:20002", user_id="20002", user_nickname="张三"),
+            _make_stream("qq:10001", user_id="10001", user_nickname="千绘莉"),
+        ]
+        task = make_task(owner="qq:10001", reply_stream_id="qq:20002")
+        assert await _resolve_auto_relay(ctx, task) == "千绘莉"
+
+    @pytest.mark.asyncio
+    async def test_private_target_same_user_no_relay(self) -> None:
+        """回复目标是发起人自己的私聊流 → 本人发言，不转达。"""
+        ctx = MockCtx()
+        ctx._chat_streams = [
+            _make_stream("qq:10001", user_id="10001", user_nickname="千绘莉"),
+        ]
+        task = make_task(owner="qq:10001", reply_stream_id="qq:10001")
+        assert await _resolve_auto_relay(ctx, task) is None
+
+    @pytest.mark.asyncio
+    async def test_group_target_no_relay(self) -> None:
+        """群目标无单一传出用户 → 维持现状，不自动转达（避免"自己转达自己"）。"""
+        ctx = MockCtx()
+        ctx._chat_streams = [
+            _make_stream("qq:group:2", user_id="", chat_type="group"),
+        ]
+        task = make_task(owner="qq:10001", reply_stream_id="qq:group:2")
+        assert await _resolve_auto_relay(ctx, task) is None
+
+    @pytest.mark.asyncio
+    async def test_unknown_owner_no_relay(self) -> None:
+        """owner 为 unknown: 兜底前缀（无 user_id）→ 不判定。"""
+        ctx = MockCtx()
+        ctx._chat_streams = [
+            _make_stream("qq:20002", user_id="20002", user_nickname="张三"),
+        ]
+        task = make_task(owner="unknown:qq:g:1", reply_stream_id="qq:20002")
+        assert await _resolve_auto_relay(ctx, task) is None
+
+    @pytest.mark.asyncio
+    async def test_malformed_owner_no_relay(self) -> None:
+        """owner 无冒号（裸 ID）→ 格式异常，不判定。"""
+        ctx = MockCtx()
+        ctx._chat_streams = [
+            _make_stream("qq:20002", user_id="20002", user_nickname="张三"),
+        ]
+        task = make_task(owner="10001", reply_stream_id="qq:20002")
+        assert await _resolve_auto_relay(ctx, task) is None
+
+    @pytest.mark.asyncio
+    async def test_target_stream_not_found_no_relay(self) -> None:
+        """目标流不在活跃流列表（或全部失败）→ 保守按本人发言处理。"""
+        ctx = MockCtx()
+        ctx._chat_streams = []
+        task = make_task(owner="qq:10001", reply_stream_id="qq:20002")
+        assert await _resolve_auto_relay(ctx, task) is None
+
+    @pytest.mark.asyncio
+    async def test_chat_lookup_failure_no_relay(self) -> None:
+        """chat.get_all_streams 抛异常 → 不判定（不阻塞发送）。"""
+        class _BrokenChat:
+            async def get_all_streams(self, platform: str = "qq") -> list[dict]:
+                raise RuntimeError("boom")
+
+        ctx = MockCtx()
+        ctx._chat = _BrokenChat()  # type: ignore[assignment]
+        task = make_task(owner="qq:10001", reply_stream_id="qq:20002")
+        assert await _resolve_auto_relay(ctx, task) is None
+
+    @pytest.mark.asyncio
+    async def test_nickname_unavailable_falls_back_to_owner(self) -> None:
+        """发起人私聊流反查不到昵称 → 兜底 owner 原文（纪律仍生效）。"""
+        ctx = MockCtx()
+        ctx._chat_streams = [
+            _make_stream("qq:20002", user_id="20002", user_nickname="张三"),
+            # 发起人流不在列表中（未活跃）→ 拿不到昵称
+        ]
+        task = make_task(owner="qq:10001", reply_stream_id="qq:20002")
+        assert await _resolve_auto_relay(ctx, task) == "qq:10001"
+
+
+class TestAutoRelayExecute:
+    """InstantExecutor.execute 集成：自动转达接入发送链路。"""
+
+    @pytest.mark.asyncio
+    async def test_execute_passes_auto_relay_to_send_polished(
+        self, mock_ctx: MockCtx, real_store: Any, default_config: MaibotAgentConfig,
+    ) -> None:
+        """目标用户 ≠ 发起人 → send_polished 收到 relay_from=发起人昵称。"""
+        await real_store.init()
+        mock_ctx._chat_streams = [
+            _make_stream("qq:20002", user_id="20002", user_nickname="张三"),
+            _make_stream("qq:10001", user_id="10001", user_nickname="千绘莉"),
+        ]
+        scheduler = _InstantScheduler()
+        task = make_task(
+            task_id="auto-relay-exec",
+            intent="原始意图",
+            level=TaskLevel.INSTANT,
+            status=TaskStatus.PENDING,
+            reply_stream_id="qq:20002",
+        )
+        await real_store.save(task)
+
+        sender = AsyncMock()
+        sender.send_polished = AsyncMock(return_value=None)
+        exec_ctx = ExecutionContext(
+            ctx=mock_ctx,
+            store=real_store,
+            scheduler=scheduler,
+            config=default_config,
+            sender=sender,
+        )
+        result = await InstantExecutor().execute(exec_ctx, task)
+        assert result.status == "COMPLETED"
+        _, kwargs = sender.send_polished.await_args
+        assert kwargs["relay_from"] == "千绘莉"
+
+    @pytest.mark.asyncio
+    async def test_execute_same_user_no_auto_relay(
+        self, mock_ctx: MockCtx, real_store: Any, default_config: MaibotAgentConfig,
+    ) -> None:
+        """回复目标即发起人本人 → send_polished 收到 relay_from=None。"""
+        await real_store.init()
+        mock_ctx._chat_streams = [
+            _make_stream("qq:10001", user_id="10001", user_nickname="千绘莉"),
+        ]
+        scheduler = _InstantScheduler()
+        task = make_task(
+            task_id="auto-relay-self",
+            intent="原始意图",
+            level=TaskLevel.INSTANT,
+            status=TaskStatus.PENDING,
+            stream_id="qq:10001",
+        )
+        await real_store.save(task)
+
+        sender = AsyncMock()
+        sender.send_polished = AsyncMock(return_value=None)
+        exec_ctx = ExecutionContext(
+            ctx=mock_ctx,
+            store=real_store,
+            scheduler=scheduler,
+            config=default_config,
+            sender=sender,
+        )
+        result = await InstantExecutor().execute(exec_ctx, task)
+        assert result.status == "COMPLETED"
+        _, kwargs = sender.send_polished.await_args
+        assert kwargs.get("relay_from") is None

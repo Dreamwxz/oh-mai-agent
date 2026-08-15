@@ -214,6 +214,11 @@ class MockCtx:
 
         async def get_stream_by_user_id(self, user_id: str, platform: str = "qq", **kwargs: Any) -> dict | None:
             self._stream_lookup_calls.append({"method": "get_stream_by_user_id", "user_id": user_id, "platform": platform, **kwargs})
+            # 对齐宿主实现（capabilities/data.py）：在私聊流中按 user_id 反查
+            for s in self._ctx._chat_streams:
+                if str(s.get("user_id", "")) == str(user_id) and str(s.get("platform", platform)) == str(platform):
+                    if str(s.get("chat_type", "")) != "group" and not s.get("is_group_session", False):
+                        return s
             return None
 
         async def get_stream_by_group_id(self, group_id: str, platform: str = "qq", **kwargs: Any) -> dict | None:

@@ -47,7 +47,7 @@
 
 **PolishService 的构造与提示词注入**。PolishService 构造时只接受 `ctx`、`config`（`PolishConfig`）与 `prompt_service`——`prompt_manager` 是传而不用、已被移除的冗余依赖。`polish()` 内部调用 `prompt_service.build("polish", ...)` 而非直接渲染模板——这是为了复用已有的 builder 注册机制，确保润色提示词也经过模板校验（`PromptManager.render` 的变量超集/子集检查）和 XML 转义。若 `prompt_service` 为 None，则由 `PolishBuilder` 兜底，但这只是一种容错回退，正常运行时永远不会触发。
 
-**转达模式：`relay_from` 单一参数**。润色只有一种模式切换：**这条消息是本人发言还是转达他人之言**。`send_polished` 的 `relay_from` 参数承载这个判断——非空（如 `"张三"`）= 转达，`polish` 模板输出转达纪律块并点名委托人（"由 张三 委托"）；缺省 = 本人发言，不输出转达块。判据就是"委托人是否存在"，调用方（send_message 工具）由 LLM 显式传 `relay_from`，默认安全（不传即本人），杜绝隐式转达。委托人不做自动推断（不再从 `task.owner` 猜），避免普通回复误带"由 xx 委托转达"。
+**转达模式：自动判定 + 单一 `relay_from` 通道**。润色只有一种模式切换：**这条消息是本人发言还是转达他人之言**。`send_polished` 的 `relay_from` 参数承载这个判断——非空（如 `"张三"`）= 转达，`polish` 模板输出转达纪律块并点名委托人（"由 张三 委托"）；缺省 = 本人发言，不输出转达块。`relay_from` 由**自动转达判定**填充（`executor/instant.py` 的 `_resolve_relay`）：比对任务发起人（`task.owner`，创建入口拼的 `platform:user_id`）与目标私聊流用户（`chat.get_all_streams` 反查，宿主 session_id 为哈希无法直接解析），不同即转达、点名发起人昵称（`chat.get_stream_by_user_id` 反查，兜底 owner 原文）。两条注入路径：**任务回复**（`InstantExecutor`）与 **send_message 工具**（Agent 循环版经 `resolve_relay` 回调基于 `current_task` 判定）；Planner 版无任务上下文，一律本人发言。**群目标无单一传出用户，不自动转达**（避免"我自己转达我自己"的怪象）；判定失败/流未找到一律保守按本人发言处理。
 
 **润色模板与主程序 replyer 对齐**。`polish.md` 的段落顺序刻意对齐 MaiBot 主程序回复生成提示词（`prompts/zh-CN/maisaka_replyer.prompt`）：人格设定（对应 `{identity}`，取自主程序 `[personality].personality`）→ 表达风格（对应 `{reply_style}`，取自主程序 `[personality].reply_style`）→ 参考信息软约束（对应"你可以参考【回复信息参考】中的信息，但是视情况而定，不用完全遵守"）→ 注意事项位 → 输入材料 → 输出指令（结尾对应 `replyer_output_instruction` 的中文文案）。人格、表达风格与机器人昵称（`[bot].nickname`，缺省"麦麦"）在 `PolishService.polish()` 每次经 `ctx.config.get` 读取主程序配置，热更新即时生效；未配置（空串）时模板不输出人格/风格节，保留默认人格行（以 `{{bot_name}}` 命名，兜底"麦麦"）。两处无法与主程序一致的插件特有内容单独安放：一是**转达纪律块放在注意事项位**——对应主程序 `group_chat_attention_block`（"在该聊天中的注意事项"）的位置，两者都是"本条消息的场景级纪律，优先于一般润色要求"；二是上下文、黑话表与原始结果集中为【输入材料】节（主程序 replyer 的聊天记录经自身机制注入，此处以显式材料呈现）。
 
@@ -67,7 +67,7 @@
 
 1. **instant 任务**：`InstantExecutor.execute()` 走 `send_polished`（+ 跨流时 `append_motivation_note`），这是最主流的路径。
 2. **agent 任务完成回复**：经 `_dispatch_reply_instant` 拆成新的 instant 任务，最终仍落回路径 1。
-3. **send_message 工具**：Agent 循环内主动发消息，回调绑定 `send_polished`（`relay_from` 由工具参数透传）。
+3. **send_message 工具**：Agent 循环内主动发消息，回调绑定 `send_polished`（`relay_from` 由注入的自动转达判定填充）。
 4. **失败通知**：`fail_task(send_message=True)` 走 `send_raw` 直发"任务执行失败"消息。
 
 四类调用共享同一套分割、指数退避重试与静默掉包检测，这保证了发送可靠性的行为一致；其中 1/2/3 另共享 PolishService 润色。
@@ -102,7 +102,7 @@
 |---|---|---|---|
 | `max_retries` | `int` | `3` | 消息发送最大重试次数（指数退避 1s→2s），超过后放弃发送并抛异常 |
 
-**面向使用者的回复路径**。普通用户不需要关心润色细节，只需知道：任务完成后，最终回复会自动经过润色、分割与逐段重试后直发到目标聊天流。通过 `send_message` 工具（Agent 循环内或 Planner 侧）主动发消息时，同样自动走润色与分割；转达他人之言时传 `relay_from` 点明委托人。回复是单向推送，用户无需操作；唯一特殊的是 ask_user 提问（见 [AI 提问](./07-ask-user.md)），那是需要用户回应的双向交互。
+**面向使用者的回复路径**。普通用户不需要关心润色细节，只需知道：任务完成后，最终回复会自动经过润色、分割与逐段重试后直发到目标聊天流。通过 `send_message` 工具（Agent 循环内或 Planner 侧）主动发消息时，同样自动走润色与分割；发送对象不是任务发起人时，系统自动按转达处理并点名委托人（Planner 版无任务上下文，按本人发言）。回复是单向推送，用户无需操作；唯一特殊的是 ask_user 提问（见 [AI 提问](./07-ask-user.md)），那是需要用户回应的双向交互。
 
 **硬编码参数**（不在配置中暴露，修改需改代码）：
 

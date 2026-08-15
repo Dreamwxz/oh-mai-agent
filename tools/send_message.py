@@ -15,8 +15,10 @@
 用户的流，跳过建流）或 ``group_id`` / ``user_id``（经 open_session 建流）。
 
 工具固定走完整发送出口（润色 + 分割 + 重试，见 ``ReplySender``），不再暴露
-``polish`` / ``split`` 开关。可选参数 ``relay_from``：转达他人之言时填写
-委托人姓名/昵称（润色点名委托人），不传视为本人发言。
+``polish`` / ``split`` 开关。转达（relay）由自动判定完成：Agent 循环版经注入的
+``resolve_relay`` 回调判定"目标用户 ≠ 任务发起人"即点名委托人（见
+``executor/instant.py`` 的 ``_resolve_relay``）；Planner 版无任务上下文，
+不做转达判定（一律本人发言）。
 """
 
 from __future__ import annotations
@@ -41,8 +43,7 @@ SEND_MESSAGE_DESCRIPTION = (
     "或 group_id 或 user_id（不能同时提供多个）"
     "+ platform（可选,默认 qq）。"
     "若不知道目标的 user_id/group_id，先调用 search_users 按昵称搜索获取。"
-    "转达他人之言必须传 relay_from（委托人姓名/昵称）并点明委托人，禁止编造转达内容、"
-    "禁止冒充本人发言；不传 relay_from 视为本人发言。"
+    "发送给他人（非任务发起人）时系统自动按转达处理并点名委托人。"
 )
 
 SEND_MESSAGE_PARAMS: list[dict[str, Any]] = [
@@ -53,8 +54,6 @@ SEND_MESSAGE_PARAMS: list[dict[str, Any]] = [
     {"name": "user_id", "type": "string", "description": "目标用户 ID（与 group_id 二选一）"},
     {"name": "platform", "type": "string", "description": "平台标识（可选，默认 qq）",
      "default": "qq"},
-    {"name": "relay_from", "type": "string",
-     "description": "转达委托人姓名/昵称（可选）。转达他人之言时必填，润色会点名委托人；不传视为本人发言"},
 ]
 
 
@@ -81,10 +80,17 @@ async def _send_to_stream(
     is_group: bool,
     send_polished: Callable[..., Awaitable[None]],
     prompt_service: Any | None,
-    relay_from: str | None = None,
+    resolve_relay: Callable[[str], Awaitable[str | None]] | None = None,
     created: bool = False,
 ) -> dict[str, Any]:
     """向已就绪的聊天流发送：委托润色+发送，随后写上下文记录。"""
+    # ── 自动转达判定：目标用户 ≠ 任务发起人 → 点名委托人 ─────────────
+    relay_from: str | None = None
+    if resolve_relay is not None:
+        try:
+            relay_from = await resolve_relay(stream_id)
+        except Exception:
+            logger.debug("send_message 自动转达判定失败，按本人发言处理: stream=%s", stream_id, exc_info=True)
     # ── 委托润色 + 发送（完整出口：润色 + 分割 + 重试）──────────────────
     try:
         logger.debug(
@@ -145,7 +151,7 @@ async def _send_message_core(
     platform: str,
     send_polished: Callable[..., Awaitable[None]],
     prompt_service: Any | None,
-    relay_from: str | None = None,
+    resolve_relay: Callable[[str], Awaitable[str | None]] | None = None,
     chat_id: str = "",
 ) -> dict[str, Any]:
     """send_message 共享核心：宿主上下文剥离 → 参数校验 → 建流/直发 → 润色+发送 → 上下文记录。
@@ -165,7 +171,9 @@ async def _send_message_core(
             Agent 版由 TaskManager 注入，Planner 版内部绑定）。
         prompt_service: PromptService 实例（可选）。提供后 XML 上下文注释
             通过 builder 生成，否则跳过 XML 记录。
-        relay_from: 转达委托人（可选）。非空 = 转达他人之言，润色点名委托人。
+        resolve_relay: ``async def(stream_id) -> relay_from | None`` 自动转达
+            判定回调（Agent 循环版由上层注入，基于 current_task 的发起人与
+            目标用户比对）；Planner 版不注入（无任务上下文，一律本人发言）。
         chat_id: 宿主注入的当前会话流 ID（MaiBot Host 专用字段，工具 schema
             无此参数，LLM 永不传）。Host 调用工具时会把当前会话上下文注入
             kwargs（stream_id/chat_id/group_id/user_id/platform，且仅当 LLM
@@ -225,8 +233,8 @@ async def _send_message_core(
             logger.warning("send_message 参数校验失败: stream_id 与 group_id/user_id 只能提供其一")
             return {"success": False, "error": "stream_id 与 group_id/user_id 只能提供其一"}
         logger.info(
-            "send_message 入口(直发流): stream_id=%s text=%r relay_from=%s",
-            stream_id, text[:80], relay_from,
+            "send_message 入口(直发流): stream_id=%s text=%r",
+            stream_id, text[:80],
         )
         # 群聊判定沿用发送器的推导规则（流 ID 含 ":group:" 视为群聊）
         return await _send_to_stream(
@@ -236,7 +244,7 @@ async def _send_message_core(
             is_group=":group:" in stream_id,
             send_polished=send_polished,
             prompt_service=prompt_service,
-            relay_from=relay_from,
+            resolve_relay=resolve_relay,
         )
     if not group_id and not user_id:
         logger.warning("send_message 参数校验失败: 未提供 stream_id/group_id/user_id")
@@ -249,8 +257,8 @@ async def _send_message_core(
     is_group = chat_type == "group"
     target_id = group_id or user_id
     logger.info(
-        "send_message 入口: platform=%s group_id=%r user_id=%r text=%r relay_from=%s",
-        platform, group_id, user_id, text[:80], relay_from,
+        "send_message 入口: platform=%s group_id=%r user_id=%r text=%r",
+        platform, group_id, user_id, text[:80],
     )
 
     # ── 推导 account_id / scope（从 get_all_streams 匹配真实会话流）─────
@@ -316,7 +324,7 @@ async def _send_message_core(
         is_group=is_group,
         send_polished=send_polished,
         prompt_service=prompt_service,
-        relay_from=relay_from,
+        resolve_relay=resolve_relay,
         created=created,
     )
 
@@ -330,6 +338,7 @@ def build_send_tool(
     send_polished: Callable[..., Awaitable[None]],
     min_role: Role = Role.USER,
     prompt_service: Any | None = None,
+    resolve_relay: Callable[[str], Awaitable[str | None]] | None = None,
 ) -> ToolDefinition:
     """构建 Agent 循环的 ``send_message`` 工具（discoverable，USER 可访问）。
 
@@ -340,6 +349,9 @@ def build_send_tool(
         min_role: 调用此工具所需的最低角色（默认 USER）。
         prompt_service: PromptService 实例（可选）。提供后，XML 上下文注释
             通过 builder 生成。
+        resolve_relay: ``async def(stream_id) -> relay_from | None`` 自动转达
+            判定回调（可选）。基于当前任务发起人与目标用户比对，目标为他人
+            私聊时返回委托人；不注入则一律本人发言（Planner 版场景）。
 
     Returns:
         单个 ``send_message`` ToolDefinition。
@@ -355,7 +367,7 @@ def build_send_tool(
             platform=str(kwargs.get("platform", "qq")).strip(),
             send_polished=send_polished,
             prompt_service=prompt_service,
-            relay_from=kwargs.get("relay_from") or None,
+            resolve_relay=resolve_relay,
             chat_id=str(kwargs.get("chat_id", "")).strip(),
         )
 
@@ -389,7 +401,11 @@ def build_send_message_handler(ctx: Any, sender: Any) -> Callable[..., Awaitable
         await sender.send_polished(text, stream_id, relay_from=relay_from)
 
     async def handler(**kwargs: Any) -> dict[str, Any]:
-        """Planner 调用：向好友/群发送消息（自动创建流 + 润色 + 重试）。"""
+        """Planner 调用：向好友/群发送消息（自动创建流 + 润色 + 重试）。
+
+        Planner 场景无任务上下文，不注入 resolve_relay —— 一律按本人发言
+        处理（转达纪律仅 Agent 循环版经自动判定生效）。
+        """
         return await _send_message_core(
             ctx,
             text=str(kwargs.get("text", "")),
@@ -399,7 +415,6 @@ def build_send_message_handler(ctx: Any, sender: Any) -> Callable[..., Awaitable
             platform=str(kwargs.get("platform", "qq")).strip(),
             send_polished=_send_polished,
             prompt_service=sender.prompt_service,
-            relay_from=kwargs.get("relay_from") or None,
             chat_id=str(kwargs.get("chat_id", "")).strip(),
         )
 

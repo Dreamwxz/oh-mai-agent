@@ -561,6 +561,83 @@ async def fail_task(
     await scheduler.on_task_completed(task)
 
 
+# ── 自动转达判定 ────────────────────────────────────────────────────────────
+
+
+async def _resolve_relay(ctx: Any, owner: str, target: str) -> str | None:
+    """自动转达判定核心：目标为私聊流且目标用户 ≠ 发起人 → 转达。
+
+    规则（对应"传出用户和传入用户不一样就加上"）：
+    - 传入用户 = ``owner``（创建入口拼的 ``platform:user_id``），
+      格式异常（``unknown:`` 前缀 / 无冒号 / 用户段含冒号）不判定；
+    - 传出用户 = ``target``（目标流 ID）反查流对象——宿主 session_id 是
+      哈希（``utils_session.calculate_session_id`` 为 MD5），无法从 ID 直接
+      解析用户，须经 ``chat.get_all_streams`` 匹配流对象；
+    - 目标为群流（无单一传出用户）或流未找到 → 不自动转达
+      （由 LLM 经 send_message 工具显式传 relay_from）；
+    - 目标用户与发起人相同 → 本人发言；不同 → 转达，
+      ``relay_from`` 取发起人昵称（``chat.get_stream_by_user_id`` 反查
+      发起人私聊流的 ``user_nickname``），反查失败兜底 ``owner`` 原文。
+
+    Args:
+        ctx: MaiBot PluginContext（chat 能力）。
+        owner: 任务发起人（``platform:user_id``，如 qq:10001）。
+        target: 目标聊天流 ID（如私聊流 / 群流，宿主为哈希值）。
+
+    Returns:
+        委托人昵称/标识；不构成转达时返回 None。
+    """
+    if not owner or not target:
+        return None
+    # owner 格式校验：platform:user_id（如 qq:10001）；unknown: 兜底前缀不判定
+    platform, sep, owner_user = owner.partition(":")
+    if not sep or not owner_user or ":" in platform or ":" in owner_user:
+        return None
+    # 反查目标流：session_id 为哈希，需匹配流对象才能拿到目标用户与聊天类型
+    try:
+        streams = await ctx.chat.get_all_streams(platform=platform)
+    except Exception:
+        logger.warning("自动转达判定：chat.get_all_streams 失败，按本人发言处理", exc_info=True)
+        return None
+    target_stream = next(
+        (
+            s for s in streams or []
+            if str(s.get("session_id", "") or s.get("stream_id", "")) == target
+        ),
+        None,
+    )
+    if target_stream is None:
+        return None
+    # 群流无单一传出用户：不自动转达
+    if bool(target_stream.get("is_group_session")) or str(
+        target_stream.get("chat_type", "")
+    ) == "group":
+        return None
+    target_user = str(target_stream.get("user_id", "") or "")
+    if not target_user or target_user == owner_user:
+        return None
+    # 发起人昵称：反查发起人私聊流，兜底 owner 原文
+    try:
+        caller_stream = await ctx.chat.get_stream_by_user_id(owner_user, platform)
+        nickname = str((caller_stream or {}).get("user_nickname", "") or "")
+    except Exception:
+        logger.warning("自动转达判定：反查发起人昵称失败，兜底 owner=%s", owner, exc_info=True)
+        nickname = ""
+    logger.info(
+        "自动转达判定：目标用户 %s ≠ 发起人 %s，relay_from=%r",
+        target_user, owner_user, nickname or owner,
+    )
+    return nickname or owner
+
+
+async def _resolve_auto_relay(ctx: Any, task: TaskRecord) -> str | None:
+    """InstantExecutor 用包装：从任务取 owner 与 reply_target 做自动转达判定。
+
+    仅当显式 ``relay_from`` 为空时调用（send_message 工具的显式转达优先）。
+    """
+    return await _resolve_relay(ctx, task.owner or "", task.reply_target or "")
+
+
 # ── InstantExecutor ──────────────────────────────────────────────────────────
 
 
@@ -577,7 +654,12 @@ class InstantExecutor:
             sender = exec_ctx.sender
             if sender is None:
                 raise RuntimeError("ExecutionContext 缺少 sender（ReplySender）")
-            await sender.send_polished(task.intent, task.reply_target)
+            # 自动转达：回复目标（私聊）与任务发起人不同 → 润色点名委托人；
+            # 本人发言 / 群目标 / 显式 relay_from 由 send_message 工具处理时不触发。
+            relay_from = await _resolve_auto_relay(exec_ctx.ctx, task)
+            await sender.send_polished(
+                task.intent, task.reply_target, relay_from=relay_from,
+            )
             if task.reply_stream_id is not None or task.is_reply_task():
                 # 跨流回复：动机 XML 注释（对用户不可见，写入 MaiBot 上下文）
                 await sender.append_motivation_note(task.reply_target, task.intent)

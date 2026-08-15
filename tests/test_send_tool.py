@@ -713,22 +713,25 @@ class TestSendMessageStreamId:
 
 class TestSendMessageOptionalFlags:
     @pytest.mark.asyncio
-    async def test_relay_from_forwarded_to_callback(self) -> None:
-        """relay_from 参数透传给 send_polished。"""
+    async def test_resolve_relay_forwarded_to_callback(self) -> None:
+        """注入的 resolve_relay 判定结果作为 relay_from 透传给 send_polished。"""
         ctx = MockCtx()
         polish_calls: list[dict] = []
 
         async def _record_polish(text: str, stream_id: str, **kwargs: Any) -> None:
             polish_calls.append(kwargs)
 
-        tool = build_send_tool(ctx, send_polished=_record_polish)
-        await tool.handler(text="Hello", user_id="67890", relay_from="张三")
+        async def _resolve(stream_id: str) -> str | None:
+            return "千绘莉"
 
-        assert polish_calls[0]["relay_from"] == "张三"
+        tool = build_send_tool(ctx, send_polished=_record_polish, resolve_relay=_resolve)
+        await tool.handler(text="Hello", user_id="67890")
+
+        assert polish_calls[0]["relay_from"] == "千绘莉"
 
     @pytest.mark.asyncio
     async def test_default_relay_from_none(self) -> None:
-        """不传 relay_from 时回调收到 None（本人发言）。"""
+        """未注入 resolve_relay（如 Planner 版）时回调收到 None（本人发言）。"""
         ctx = MockCtx()
         polish_calls: list[dict] = []
 
@@ -736,6 +739,23 @@ class TestSendMessageOptionalFlags:
             polish_calls.append(kwargs)
 
         tool = build_send_tool(ctx, send_polished=_record_polish)
+        await tool.handler(text="Hello", user_id="67890")
+
+        assert polish_calls[0]["relay_from"] is None
+
+    @pytest.mark.asyncio
+    async def test_resolve_relay_exception_falls_back_none(self) -> None:
+        """resolve_relay 抛异常时降级为 None（本人发言），不阻塞发送。"""
+        ctx = MockCtx()
+        polish_calls: list[dict] = []
+
+        async def _record_polish(text: str, stream_id: str, **kwargs: Any) -> None:
+            polish_calls.append(kwargs)
+
+        async def _broken(stream_id: str) -> str | None:
+            raise RuntimeError("boom")
+
+        tool = build_send_tool(ctx, send_polished=_record_polish, resolve_relay=_broken)
         await tool.handler(text="Hello", user_id="67890")
 
         assert polish_calls[0]["relay_from"] is None
