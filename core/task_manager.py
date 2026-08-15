@@ -140,6 +140,8 @@ class TaskManager:
             prompt_service=prompt_service,
             ctx=ctx,
             sender=sender,
+            # 任务解析（完整 ID → 前缀 → 唯一标题）由 TaskCrud 提供
+            resolve_task=self._crud.resolve_task,
         )
 
     @property
@@ -292,7 +294,7 @@ class TaskManager:
         caller_role: Role,
         owner: str,
     ) -> tuple[bool, str]:
-        return await self._crud.cancel_task(task_id, caller_role=caller_role, owner=owner)
+        return await self._control.cancel_task(task_id, caller_role=caller_role, owner=owner)
 
     async def pause_task(
         self,
@@ -301,7 +303,7 @@ class TaskManager:
         caller_role: Role,
         owner: str,
     ) -> tuple[bool, str]:
-        return await self._crud.pause_task(task_id, caller_role=caller_role, owner=owner)
+        return await self._control.pause_task(task_id, caller_role=caller_role, owner=owner)
 
     async def resume_task(
         self,
@@ -310,7 +312,7 @@ class TaskManager:
         caller_role: Role,
         owner: str,
     ) -> tuple[bool, str]:
-        return await self._crud.resume_task(task_id, caller_role=caller_role, owner=owner)
+        return await self._control.resume_task(task_id, caller_role=caller_role, owner=owner)
 
     # ── instant / agent 执行 ─────────────────────────────────────────
 

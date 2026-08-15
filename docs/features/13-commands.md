@@ -45,7 +45,7 @@ async def cmd_task_create(self, **kwargs: Any) -> tuple[bool, str, int]:
 
 commands.py 不直接接触 usecase 层，一律经 `TaskManager` 门面（core/task_manager.py 的 `TaskManager` 类）。门面内部再转发给两个 usecase：
 
-- **TaskCrud**（core/usecases/task_crud.py）：持久化 CRUD，提供 `create_task` / `list_tasks` / `get_task` / `modify_task` / `cancel_task` / `task_history`。
+- **TaskCrud**（core/usecases/task_crud.py）：持久化 CRUD，提供 `create_task` / `list_tasks` / `get_task` / `modify_task` / `task_history`；控制操作（`cancel_task` / `pause_task` / `resume_task`）在 **TaskControl**（core/usecases/task_control.py）。
 - **TaskControl**（core/usecases/task_control.py）：执行控制。`/maitask ask` 的注入指令最终经 `TaskControl.handle_injection` 向命令总线发送 `INJECT_INSTRUCTION`，由 AgentLoop 消费。
 
 ### 权限映射

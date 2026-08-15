@@ -23,7 +23,11 @@ logger = logging.getLogger(__name__)
 
 
 class TaskCrud:
-    """Create, query, modify, and control persisted tasks."""
+    """Create, query, and modify persisted tasks.
+
+    控制操作（cancel / pause / resume）已归位到 ``TaskControl``
+    （core/usecases/task_control.py）——本类只负责 CRUD 与解析。
+    """
 
     def __init__(
         self,
@@ -231,37 +235,6 @@ class TaskCrud:
                 await self._scheduler.refresh_pending(resolved.id)
             logger.info("任务 %s 已修改 (intent=%s inject=%s pri=%s)", resolved.id, bool(new_intent), bool(inject_instruction), priority)
         return True, "修改成功" if modified else "无变更"
-
-    async def _control_task(self, task_id: str, caller_role: Role, owner: str, action: str) -> tuple[bool, str]:
-        ok, resolved = await self.resolve_task(task_id)
-        if not ok:
-            return False, resolved
-        if caller_role != Role.ADMIN and resolved.owner != owner:
-            permissions = {
-                "cancel": "权限不足：只能取消自己的任务",
-                "pause": "权限不足：只能暂停自己的任务",
-                "resume": "权限不足：只能恢复自己的任务",
-            }
-            return False, permissions[action]
-        method = getattr(self._scheduler, action)
-        if await method(resolved.id):
-            logger.info("任务 %s 已被 %s %s", resolved.id, owner, action)
-            messages = {"cancel": f"任务 {resolved.id[:8]} 已取消", "pause": "已暂停", "resume": "已恢复"}
-            return True, messages[action]
-        failures = {"cancel": "取消失败（任务可能已处于终态）", "pause": "暂停失败（任务可能已处于终态或非 RUNNING）", "resume": "恢复失败（任务可能已处于终态或非 PAUSED）"}
-        return False, failures[action]
-
-    async def cancel_task(self, task_id: str, *, caller_role: Role, owner: str) -> tuple[bool, str]:
-        """Cancel a task owned by the caller or accessible to an admin."""
-        return await self._control_task(task_id, caller_role, owner, "cancel")
-
-    async def pause_task(self, task_id: str, *, caller_role: Role, owner: str) -> tuple[bool, str]:
-        """Pause a task owned by the caller or accessible to an admin."""
-        return await self._control_task(task_id, caller_role, owner, "pause")
-
-    async def resume_task(self, task_id: str, *, caller_role: Role, owner: str) -> tuple[bool, str]:
-        """Resume a task owned by the caller or accessible to an admin."""
-        return await self._control_task(task_id, caller_role, owner, "resume")
 
     async def task_history(
         self, task_id: str, *, caller_role: Role, owner: str, limit: int = 50,
