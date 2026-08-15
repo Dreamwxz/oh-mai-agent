@@ -19,16 +19,16 @@
 
 ### 两种派发：ask_subagent 单派 / ask_subagents 批量并行
 
-`tools/agent/subagent_tool.py` 提供两个 Discoverable 工具（`min_role=USER`，`config.py` 的 `SubAgentConfig.enabled=false` 时 `TaskManager.setup()` 不注册）：
+`tools/agent/subagent_tool.py` 提供两个 Discoverable 工具（`min_role=USER`，`config.py` 的 `SubAgentConfig.enabled=false` 时 `TaskManager.setup()`——现委托 `executor/tool_registrar.py` 的 `register_agent_tools`——不注册）：
 
-- **`ask_subagent`（单派）**：参数 `intent`（必填）+ `tools`（可选，必须为默认允许集的子集，含非法名则**整体拒绝**，绝不静默过滤；空列表 = 默认集）。构建一个 SubAgentLoop 运行，返回 `{"success", "answer", "rounds", "max_rounds_reached", "error"}`（原样透传 SubAgentLoop 结果，答案按 `max_result_chars` 截断）。
-- **`ask_subagents`（批量并行）**：参数 `intents`（必填、非空、长度 ≤ `config_getter().max_parallel_subagents`，超限/为空整体拒绝）+ `tools`（可选，语义同单个工具，**所有子 Agent 共享同一工具集**，不支持按 intent 单独指定）。`asyncio.gather` 并行运行多个独立 SubAgentLoop（每个独立 messages、独立 rounds），合并返回 `{"success", "answers": [{"intent", "answer", "rounds", "max_rounds_reached", "success", "error"}...], "total_rounds", "error"}`——单项失败不影响其余项继续跑，顶层 `success` 取所有项的与，失败项错误以 `"; "` 聚合。
+- **`ask_subagent`（单派）**：参数 `intent`（必填）+ `tools`（可选，必须为默认允许集的子集，含非法名则**整体拒绝**，绝不静默过滤；空列表 = 默认集）。执行由 `AgentLoop` 合成分支 `_run_subagent` 完成，返回 `{"success", "answer", "rounds", "max_rounds_reached", "error"}`（原样透传 SubAgentLoop 结果，答案按 `max_result_chars` 截断）。
+- **`ask_subagents`（批量并行）**：参数 `intents`（必填、非空、长度 ≤ `config.subagent.max_parallel_subagents`，超限/为空整体拒绝）+ `tools`（可选，语义同单个工具，**所有子 Agent 共享同一工具集**，不支持按 intent 单独指定）。合成分支 `_run_subagents` 以 `asyncio.gather` 并行运行多个独立 SubAgentLoop（每个独立 messages、独立 rounds），合并返回 `{"success", "answers": [{"intent", "answer", "rounds", "max_rounds_reached", "success", "error"}...], "total_rounds", "error"}`——单项失败不影响其余项继续跑，顶层 `success` 取所有项的与，失败项错误以 `"; "` 聚合。
 
 批量上限是硬约束：`max_parallel_subagents`（默认 3）由配置控制，超限请求在进入任何 LLM 调用前就被拒绝。
 
-### 进程内 SubAgentLoop
+### 进程内 SubAgentLoop（执行引擎在 Agent 域）
 
-`executor/subagent.py` 的 `SubAgentLoop` 是一个轻量嵌套循环，只做一件事：把一段 `intent` 跑成一段答案。流程（`run(intent)`）：
+「子 Agent 也是 Agent」：`executor/subagent.py` 的 `SubAgentLoop` 是**执行引擎**，属于 Agent 域（executor 层），只做一件事：把一段 `intent` 跑成一段答案。它由 `AgentLoop` 的**合成工具分支**实例化（`executor/agent_loop.py` 的 `_run_subagent` / `_run_subagents`，与 `ask_user` / `list_tools` 同构）——工具层（`tools/agent/subagent_tool.py`）只提供 schema 与工具集规则，不 import executor，依赖方向 `executor → tools` 单向成立。流程（`run(intent)`）：
 
 1. system prompt = `prompt_service.build("subagent_system", intent=..., tool_list=...)`（模板见下文「提示词模板」）；
 2. 循环最多 `config.subagent.max_rounds`（默认 10）轮：每轮 `ctx.llm.generate_with_tools(model="planner", timeout_ms=240000)`（沿用主循环同一 LLM 通道，不新增 task_name）；
@@ -39,9 +39,9 @@
 
 `max_rounds` 耗尽（含 `max_rounds=1` 且该轮全为 tool_calls 的边界）时：取最后一轮 assistant 内容（可能为空串）为答案、`max_rounds_reached=True`、`success` 仍为 True——由主 Agent 依据 `max_rounds_reached` 判断结果是否可信。
 
-### 工具集规则与执行守卫（schema 层 + 执行层双保险）
+### 工具集规则（工具层）与执行守卫（执行层）
 
-子 Agent 能看到的工具不是全量注册表，而是**默认允许集**：registry 按当前角色可见的全部工具，排除精确名 `ask_user` / `send_message` / `list_my_tasks` / `create_subtask` / `inject_task` / `ask_subagent` / `ask_subagents` / `list_plugin_tools`（`_SUBAGENT_EXCLUDED`），排除 `call_` 前缀（跨插件 API 工具）；MCP 工具（`mcp_` 前缀）包含。工具集解析统一收敛在 `tools/agent/subagent_tool.py` 的 `_resolve_toolset`。
+子 Agent 能看到的工具不是全量注册表，而是**默认允许集**：registry 按当前角色可见的全部工具，排除精确名 `ask_user` / `send_message` / `list_my_tasks` / `create_subtask` / `inject_task` / `ask_subagent` / `ask_subagents` / `run_command`（`_SUBAGENT_EXCLUDED`），排除 `call_` 前缀（跨插件 API 工具）；MCP 工具（`mcp_` 前缀）包含。工具集解析统一收敛在 `tools/agent/subagent_tool.py` 的 `resolve_toolset`（公共函数，供 AgentLoop 合成分支与测试共用）。
 
 安全边界有两层：
 
@@ -50,7 +50,7 @@
 
 ### 取消传导
 
-主任务取消要能打断正在跑的子 Agent：`executor/agent_loop.py` 的 `AgentLoop` 暴露只读属性 `is_cancelled`；`executor/context.py` 增加 `current_cancel_check` ContextVar（默认 None），由 `AgentExecutor.execute()` 在构造循环后 set、finally 中与 `current_task` 一起 reset。SubAgentLoop 每轮开始前与 gather 前检查 `should_cancel()`，命中则提前返回 `{"success": False, "error": "cancelled", ...}`。对主循环是纯增量改动（只读访问器），行为零变化。
+主任务取消要能打断正在跑的子 Agent：`AgentLoop` 暴露只读属性 `is_cancelled`；合成分支 `_make_subagent_loop` 直接注入 `should_cancel=lambda: self.is_cancelled`——主循环取消即子循环在每轮开始前与 gather 前退出，返回 `{"success": False, "error": "cancelled", ...}`。取消状态经构造函数显式注入，不依赖 ContextVar 隐式全局（原 `current_cancel_check` ContextVar 已随本次重构移除）。
 
 ### 角色与文件沙箱继承
 
@@ -58,7 +58,7 @@
 
 ### 配置热更新
 
-handler 每次调用都执行 `cfg = config_getter()` 读取**当前**配置（闭包内是 `lambda: self._config.subagent` 引用，绝不缓存配置对象快照）——`TaskManager.update_config()` 后新值（如 `max_parallel_subagents`）无需重注册立即生效。
+子 Agent 配置的读取在 AgentLoop 合成分支：`AgentExecutor.execute()` 每次执行时从 `ExecutionContext.config` 取当前配置引用，注入 `subagent_config_getter`（`executor/agent.py`），合成分支每次派发调用 `cfg = self._subagent_config()` 读取**当前**配置（绝不缓存配置对象快照）——`TaskManager.update_config()` 后新值（如 `max_parallel_subagents`）对新任务无需重注册立即生效。
 
 ### 提示词模板
 
@@ -79,7 +79,7 @@ handler 每次调用都执行 `cfg = config_getter()` 读取**当前**配置（�
 
 ### 使用方式
 
-子 Agent 由主 Agent 通过工具调用自动触发，用户无需手动介入：主循环某一轮 LLM 返回 `ask_subagent(intent="...")` 或 `ask_subagents(intents=[...])` 工具调用 → handler 构建子循环运行 → 结论作为工具结果交回主 Agent 上下文 → 主 Agent 下一轮据此继续判断。
+子 Agent 由主 Agent 通过工具调用自动触发，用户无需手动介入：主循环某一轮 LLM 返回 `ask_subagent(intent="...")` 或 `ask_subagents(intents=[...])` 工具调用 → AgentLoop 合成分支构建子循环运行 → 结论作为工具结果交回主 Agent 上下文 → 主 Agent 下一轮据此继续判断。
 
 ### 已知限制与边界
 

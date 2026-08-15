@@ -30,7 +30,9 @@ COMPLETED / FAILED / CANCELLED 已随「完成通知统一为直接调用」退�
 `ctx.scheduler.on_task_completed` 注入 AgentLoop——同步释放并发额度 + CRON 重排，
 不经过事件总线（时序可预期；`TaskCommandBus.publish / listen_events` 保留为预留
 机制，当前无消费者）。主 Agent 还可经 `ask_subagent` / `ask_subagents` 工具派发进程内子 Agent
-（`executor/subagent.py` 的 SubAgentLoop，并行工具轮 + 答案回传主循环继续判断）。
+（AgentLoop 合成分支 `_run_subagent` / `_run_subagents` 实例化 `executor/subagent.py` 的
+SubAgentLoop，并行工具轮 + 答案回传主循环继续判断；取消经注入 `lambda: loop.is_cancelled`
+传导，工具层不 import executor）。
 执行期上下文经 `executor/context.py` 的 `current_task` ContextVar 传递（唯一 set 方
 AgentExecutor.execute，finally reset 防并发泄漏），`make_role_provider` 按任务 owner/stream_id
 构造角色回调。回复链路统一走 `executor/instant.py` 的 `ReplySender` 两条出口：

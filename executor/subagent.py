@@ -11,8 +11,9 @@
   - 每个工具调用执行前校验其名称在允许工具集内，命中被排除工具名
     直接返回错误 dict，绝不落入 registry.execute。
 
-取消传导：``should_cancel`` 由调用方注入（AgentExecutor 执行期间的
-``current_cancel_check``），每轮开始前与并行 gather 前各检查一次。
+取消传导：``should_cancel`` 由调用方注入——AgentLoop 合成分支
+（``agent_loop.py`` 的 ``_make_subagent_loop``）注入 ``lambda: self.is_cancelled``，
+主循环取消即子循环在每轮开始前与并行 gather 前退出（不经 ContextVar 间接层）。
 """
 
 from __future__ import annotations
@@ -43,7 +44,7 @@ class SubAgentLoop:
             prompt_service=prompt_service,
             max_rounds=cfg.max_rounds,
             max_result_chars=cfg.max_result_chars,
-            should_cancel=current_cancel_check.get(),
+            should_cancel=lambda: main_loop.is_cancelled,
             execute_tool=_exec,  # async def _exec(name, role, args) -> dict
         )
         result = await loop.run(intent)

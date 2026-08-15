@@ -142,24 +142,13 @@ async def register_agent_tools(w: ToolWiring) -> None:
         logger.warning("扫描插件 API 工具失败", exc_info=True)
 
     # ── 7. 子 Agent 工具（可配置开关）───────────────────────────────
-    # config_getter 为 lambda 读取当前 w.config.subagent 引用，
-    # update_config 热更新后新值立即生效（无需重新注册）。
+    # schema 为静态定义（零参数 builder）；执行在 AgentLoop 合成分支
+    # （executor/agent_loop.py 的 _run_subagent/_run_subagents），子 Agent
+    # 配置（max_rounds 等）由 AgentExecutor 注入 config 读取器，无需装配期绑定。
     if w.config_getter().subagent.enabled:
         for tool in (
-            build_subagent_tool(
-                w.ctx,
-                w.registry,
-                w.prompt_service,
-                config_getter=lambda: w.config_getter().subagent,
-                role_provider=w.role_provider,
-            ),
-            build_subagents_tool(
-                w.ctx,
-                w.registry,
-                w.prompt_service,
-                config_getter=lambda: w.config_getter().subagent,
-                role_provider=w.role_provider,
-            ),
+            build_subagent_tool(),
+            build_subagents_tool(),
         ):
             w.registry.register(tool)
 

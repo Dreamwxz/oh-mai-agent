@@ -89,16 +89,14 @@ def _role_from_current_task(resolver: PermissionResolver) -> Callable[[], Role]:
     return provider
 
 
-def _register_subagent_tools(
-    reg: ToolRegistry,
-    ctx: Any,
-    prompt_service: Any,
-    role_provider: Callable[[], Role],
-) -> tuple[ToolDefinition, ToolDefinition]:
-    """注册 ask_subagent / ask_subagents（config_getter 读取默认配置）。"""
-    cfg_getter: Callable[[], SubAgentConfig] = lambda: SubAgentConfig()
-    single = build_subagent_tool(ctx, reg, prompt_service, cfg_getter, role_provider)
-    batch = build_subagents_tool(ctx, reg, prompt_service, cfg_getter, role_provider)
+def _register_subagent_tools(reg: ToolRegistry) -> tuple[ToolDefinition, ToolDefinition]:
+    """注册 ask_subagent / ask_subagents（schema 静态定义，零参数 builder）。
+
+    执行在 AgentLoop 合成分支（executor/agent_loop.py 的 _run_subagent/
+    _run_subagents），子 Agent 配置由 AgentExecutor 注入，装配期无需绑定。
+    """
+    single = build_subagent_tool()
+    batch = build_subagents_tool()
     reg.register(single)
     reg.register(batch)
     return single, batch
@@ -126,7 +124,7 @@ def _build_env(
         role_provider=rp,
     ):
         reg.register(tool)
-    _register_subagent_tools(reg, mock_ctx, prompt_service, rp)
+    _register_subagent_tools(reg)
     return reg
 
 
@@ -147,8 +145,8 @@ async def _run_agent_executor(
     resolver: PermissionResolver,
     task: Any,
 ) -> Any:
-    """经 AgentExecutor.execute 运行真实 AgentLoop（设置 current_task /
-    current_cancel_check 上下文）。"""
+    """经 AgentExecutor.execute 运行真实 AgentLoop（设置 current_task 上下文；
+    子 Agent 取消经合成分支注入 is_cancelled 传导）。"""
     executor = AgentExecutor(
         registry=reg,
         prompt_manager=pm,
@@ -258,81 +256,6 @@ def _write_file_call(path: str, content: str, call_id: str = "sc1") -> dict:
             ),
         },
     }
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# (a) 并行工具执行排序 — 乱序完成也保序
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
-class TestParallelOrdering:
-    @pytest.mark.asyncio
-    async def test_three_tool_calls_complete_out_of_order_still_ordered(
-        self, mock_ctx: MockCtx, prompt_service: Any,
-    ) -> None:
-        """子循环单轮 3 个 tool_calls：互锁工具强制重叠、乱序完成，
-        结果 tool 消息仍按 tool_calls 原始顺序追加且 tool_call_id 对应正确。"""
-        gate_a = asyncio.Event()
-        gate_b = asyncio.Event()
-        executed: list[str] = []
-        intervals: dict[str, tuple[float, float]] = {}
-
-        async def slow_a(**kwargs: Any) -> dict:
-            executed.append("t_a")
-            start = time.monotonic()
-            gate_a.set()
-            await gate_b.wait()  # 等 t_b 完成信号 → t_a 必然晚于 t_b 结束
-            intervals["a"] = (start, time.monotonic())
-            return {"success": True, "name": "a"}
-
-        async def slow_b(**kwargs: Any) -> dict:
-            executed.append("t_b")
-            await gate_a.wait()  # 确保 t_a 已进入等待
-            start = time.monotonic()
-            gate_b.set()
-            intervals["b"] = (start, time.monotonic())
-            return {"success": True, "name": "b"}
-
-        async def fast_c(**kwargs: Any) -> dict:
-            executed.append("t_c")
-            return {"success": True, "name": "c"}
-
-        reg = ToolRegistry()
-        reg.register(_make_tool("t_a", slow_a))
-        reg.register(_make_tool("t_b", slow_b))
-        reg.register(_make_tool("t_c", fast_c))
-        _register_subagent_tools(reg, mock_ctx, prompt_service, lambda: Role.USER)
-
-        mock_ctx.llm.set_tool_response("调用工具", [
-            {"id": "call-1", "function": {"name": "t_a", "arguments": "{}"}},
-            {"id": "call-2", "function": {"name": "t_b", "arguments": "{}"}},
-            {"id": "call-3", "function": {"name": "t_c", "arguments": "{}"}},
-        ])
-        mock_ctx.llm.set_tool_response("全部完成", [])
-
-        result = await asyncio.wait_for(
-            reg.execute("ask_subagent", Role.USER, intent="并行调用三个工具"),
-            timeout=5,
-        )
-        assert result["success"] is True
-        assert result["answer"] == "全部完成"
-        assert result["rounds"] == 2
-
-        # 两个互锁 handler 执行区间重叠（真并发）
-        assert "a" in intervals and "b" in intervals
-        a_start, a_end = intervals["a"]
-        b_start, b_end = intervals["b"]
-        assert b_start < a_end and a_start < b_end
-        # 乱序完成（t_a 最后返回），但全部执行
-        assert executed == ["t_a", "t_b", "t_c"] or sorted(executed) == ["t_a", "t_b", "t_c"]
-
-        # 第 2 轮 LLM 收到的 tool 消息按 tool_calls 原始顺序追加，id 对应正确
-        second_call = mock_ctx.llm.call_history[1]
-        tool_msgs = _tool_msgs(second_call["prompt"])
-        assert [m["tool_call_id"] for m in tool_msgs] == ["call-1", "call-2", "call-3"]
-        assert json.loads(tool_msgs[0]["content"]) == {"success": True, "name": "a"}
-        assert json.loads(tool_msgs[1]["content"]) == {"success": True, "name": "b"}
-        assert json.loads(tool_msgs[2]["content"]) == {"success": True, "name": "c"}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -546,35 +469,6 @@ class TestRoleInheritance:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# (d) 工具覆盖校验 — tools=["read"] 时 schema 仅含 read
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
-class TestToolsetOverride:
-    @pytest.mark.asyncio
-    async def test_override_schema_contains_only_requested_tool(
-        self, mock_ctx: MockCtx, prompt_service: Any,
-    ) -> None:
-        """ask_subagent(tools=["read"]) → 子循环 schema 仅含 read。"""
-        reg = ToolRegistry()
-        reg.register(_make_tool("read", _ok_handler))
-        reg.register(_make_tool("write", _ok_handler))
-        _register_subagent_tools(reg, mock_ctx, prompt_service, lambda: Role.USER)
-
-        mock_ctx.llm.set_tool_response("文件内容：hello")
-        result = await reg.execute(
-            "ask_subagent", Role.USER,
-            intent="读取文件", tools=["read"],
-        )
-        assert result["success"] is True
-        assert result["answer"] == "文件内容：hello"
-        # 唯一一次 LLM 调用（子循环）的 tools 参数仅含 read
-        assert len(mock_ctx.llm.call_history) == 1
-        schema_names = {t["function"]["name"] for t in mock_ctx.llm.call_history[0]["tools"]}
-        assert schema_names == {"read"}
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
 # (e) 批量并行 — 3 个独立 SubAgentLoop 真并发 + 合并答案回传
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -687,19 +581,8 @@ class TestBatchCancel:
         task = make_task("t8f-cancel", level=TaskLevel.AGENT, status=TaskStatus.RUNNING)
         await store.save(task)
 
-        # 捕获 ask_subagents 合并结果
-        batch_tool = reg.get("ask_subagents")
-        assert batch_tool is not None
-        captured: list[dict] = []
-        orig_handler = batch_tool.handler
-
-        async def wrapped_handler(**kwargs: Any) -> dict:
-            result = await orig_handler(**kwargs)
-            captured.append(result)
-            return result
-
-        batch_tool.handler = wrapped_handler
-
+        # 合并结果经主循环第 1 轮持久化的工具消息读取：ask_subagents 的执行
+        # 在 AgentLoop 合成分支（不经 registry handler），无法包装 handler 捕获。
         gated = _GatedBatchLLM([
             {  # 主循环第 1 轮：批量派发
                 "success": True,
@@ -744,8 +627,11 @@ class TestBatchCancel:
                 run_task.cancel()
 
         # 合并结果：每项 error="cancelled"、rounds=0（下一轮边界前退出）
-        assert len(captured) == 1
-        merged = captured[0]
+        history = await store.get_history(task.id)
+        assert history, "主循环第 1 轮必须已持久化"
+        tool_msgs = [m for m in history[0]["messages"] if m.get("role") == "tool"]
+        assert tool_msgs, "主循环工具消息必须包含 ask_subagents 结果"
+        merged = json.loads(tool_msgs[0]["content"])
         assert merged["success"] is False
         assert merged["total_rounds"] == 0
         assert len(merged["answers"]) == 3

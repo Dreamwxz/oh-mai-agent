@@ -1,39 +1,28 @@
-"""子 Agent 工具 — ask_subagent / ask_subagents（批量并行）。
+"""子 Agent 工具 schema 与工具集规则 — ask_subagent / ask_subagents。
 
-本模块提供两个 Discoverable 级、USER 可访问的工具：
+本模块只承担**工具域**职责，不含任何执行逻辑：
 
-- ``ask_subagent``：把「去搜 X、查 Y、读/写文件 Z」这类局部工作派给一个
-  子 Agent 独立完成（进程内嵌套循环，结果直接回到主 Agent 上下文）。
-- ``ask_subagents``：一次并行派发多个子 Agent（上限
-  ``config.subagent.max_parallel_subagents``，默认 3），全部返回后合并答案。
+- ``resolve_toolset``：子 Agent 默认允许集 / 显式子集校验（工具语义唯一实现，
+  供 ``AgentLoop`` 合成分支与测试共用）；
+- ``build_subagent_tool`` / ``build_subagents_tool``：两个 Discoverable 工具的
+  静态 schema 定义（LLM 可见接口，构建零参数、不依赖运行时句柄）。
 
-工具集规则（默认允许集）：当前角色可见的全部工具，排除精确名
-``ask_user`` / ``send_message`` / ``list_my_tasks`` / ``create_subtask`` /
-``inject_task`` / ``ask_subagent`` / ``ask_subagents`` /
-``run_command`` 与 ``call_`` 前缀（跨插件 API 工具）；MCP 工具（``mcp_`` 前缀）包含。
+**执行不在本层**。「子 Agent 也是 Agent」——派发由 ``AgentLoop`` 的合成工具
+分支内建执行（``executor/agent_loop.py`` 的 ``_run_subagent`` / ``_run_subagents``），
+执行引擎（``SubAgentLoop``）属于 Agent 域（executor 层）。本层工具 handler
+只是 ``registry.execute`` 直调路径的守卫：正常路径在 AgentLoop 分发处被拦截，
+handler 不会被调用；守卫保证任何绕过分发器的直调得到明确错误而非静默行为。
 
-``tools`` 参数可选：缺省/为空 → 默认允许集；传入时必须为默认允许集的子集，
-任一非法名 → 整体拒绝（绝不静默过滤）。
-
-配置热更新：``config_getter`` 为每次调用读取的 lambda，闭包内绝不缓存配置
-对象快照——``max_rounds`` / ``max_result_chars`` / ``max_parallel_subagents``
-修改后立即生效。
+依赖方向：本模块不 import executor（``executor → tools`` 单向成立）。
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
-from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from ...executor.context import current_cancel_check
-from ...executor.subagent import SubAgentLoop
 from ...permission import Role
 from ..registry import ToolDefinition
-
-if TYPE_CHECKING:
-    from ...config import SubAgentConfig
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +40,7 @@ _SUBAGENT_EXCLUDED = frozenset({
 })
 
 
-def _resolve_toolset(
+def resolve_toolset(
     registry, role: Role, requested: list[str] | str | None
 ) -> list[ToolDefinition]:
     """解析子 Agent 的可用工具集（严格校验，绝不静默过滤）。
@@ -66,6 +55,9 @@ def _resolve_toolset(
 
     Raises:
         ValueError: 请求的工具名不在默认允许集内（非法名整体拒绝）。
+
+    供 ``AgentLoop`` 合成分支（``executor/agent_loop.py``）与工具语义测试共用；
+    执行方必须处理 ``ValueError`` 并向调用方返回错误，绝不静默过滤。
     """
     allowed = [
         t
@@ -85,97 +77,36 @@ def _resolve_toolset(
     return [t for t in allowed if t.name in requested_names]
 
 
-def _make_runner(
-    ctx,
-    registry,
-    prompt_service,
-    config_getter: Callable[[], "SubAgentConfig"],
-    role: Role,
-    requested: list[str] | str | None = None,
-) -> Callable[[str], Awaitable[dict]]:
-    """构造单次派发执行器 ``_run_one(intent)``。
+def _guard_handler(tool_name: str):
+    """registry.execute 直调路径的守卫 handler。
 
-    ``_run_one`` 每次调用都读取 ``cfg = config_getter()``（闭包不缓存配置
-    对象快照，热更新立即生效），并以当前 ``current_cancel_check`` 上下文变量
-    作为取消守卫；工具集经 ``_resolve_toolset`` 按 *requested* 实时解析。
-    """
-
-    async def _run_one(intent: str) -> dict:
-        cfg = config_getter()  # 每次调用读取，热更新立即生效
-
-        async def _exec(name: str, role_: Role, args: dict) -> dict:
-            # registry.execute 是 **kwargs 签名，必须解包 dict 再透传；
-            # 剥离保留参数名（name/role），避免 LLM 夹带时关键字重复绑定抛 TypeError。
-            call_args = {k: v for k, v in args.items() if k not in ("name", "role")}
-            return await registry.execute(name, role_, **call_args)
-
-        try:
-            defs = _resolve_toolset(registry, role, requested)
-            loop = SubAgentLoop(
-                ctx,
-                tools=defs,
-                role=role,
-                prompt_service=prompt_service,
-                max_rounds=cfg.max_rounds,
-                max_result_chars=cfg.max_result_chars,
-                should_cancel=current_cancel_check.get(),
-                execute_tool=_exec,
-            )
-            return await loop.run(intent)
-        except Exception as exc:
-            # 兜底：_run_one 永不抛异常（gather 侧无需 return_exceptions），
-            # 所有返回路径都携带完整 5 键。
-            logger.exception("ask_subagent 子循环异常：%s", str(exc)[:200])
-            return {
-                "success": False,
-                "answer": "",
-                "rounds": 0,
-                "max_rounds_reached": False,
-                "error": str(exc),
-            }
-
-    return _run_one
-
-
-def build_subagent_tool(
-    ctx,
-    registry,
-    prompt_service,
-    config_getter: Callable[[], "SubAgentConfig"],
-    role_provider: Callable[[], Role],
-) -> ToolDefinition:
-    """构建 ``ask_subagent`` 工具（单派发）。
-
-    Args:
-        ctx: 插件上下文（透传给 SubAgentLoop 供 LLM 调用）。
-        registry: ToolRegistry，用于解析默认允许集与执行工具。
-        prompt_service: PromptService，渲染子 Agent 系统提示。
-        config_getter: ``() -> SubAgentConfig``，每次调用读取（热更新生效）。
-        role_provider: ``() -> Role``，解析当前任务的调用者角色。
+    正常路径（主 Agent 循环）在 ``AgentLoop.run`` 的工具分发处拦截
+    ``ask_subagent`` / ``ask_subagents``，不会走到本守卫；本函数仅在
+    直接 ``registry.execute`` 直调（绕过 AgentLoop）时触发，返回明确错误。
     """
 
     async def _handler(**kwargs: Any) -> dict:
-        intent: str = kwargs.get("intent", "")
-        if not intent:
-            logger.warning("ask_subagent 参数校验失败：缺少意图 intent")
-            return {"success": False, "error": "缺少必需参数: intent"}
-
-        requested = kwargs.get("tools")
-        role = role_provider()
-        try:
-            # 严格校验：任一非法名 → 整体拒绝，绝不静默过滤。
-            _resolve_toolset(registry, role, requested)
-        except ValueError as exc:
-            logger.warning("ask_subagent 工具集校验失败：%s", exc)
-            return {"success": False, "error": str(exc)}
-
-        logger.info("ask_subagent 派发：意图 %.80r，角色 %s", intent, role.value)
-        runner = _make_runner(
-            ctx, registry, prompt_service, config_getter, role, requested=requested
+        logger.warning(
+            "%s 被 registry.execute 直调：该工具由 AgentLoop 合成工具分支内建执行，不支持直接调用",
+            tool_name,
         )
-        # 原样透传 SubAgentLoop 结果 dict（含 max_rounds_reached）。
-        return await runner(intent)
+        return {
+            "success": False,
+            "error": (
+                f"{tool_name} 由 Agent 引擎内建执行（AgentLoop 合成分支），"
+                "不支持直接调用"
+            ),
+        }
 
+    return _handler
+
+
+def build_subagent_tool() -> ToolDefinition:
+    """构建 ``ask_subagent`` 工具 schema（单派发；执行在 AgentLoop 合成分支）。
+
+    schema 为纯静态定义：构建不依赖 ctx / registry / 配置——LLM 可见接口
+    （名称、描述、参数、可见性、角色门槛）与执行细节完全解耦。
+    """
     description = (
         "派发一个子 Agent 独立完成局部工作（最多 10 轮），结果作为工具结果返回。"
         "子 Agent 只能使用信息检索、文件读写与 MCP 工具，"
@@ -204,85 +135,19 @@ def build_subagent_tool(
             },
             "required": ["intent"],
         },
-        handler=_handler,
+        handler=_guard_handler("ask_subagent"),
         visibility="discoverable",
         min_role=Role.USER,
     )
 
 
-def build_subagents_tool(
-    ctx,
-    registry,
-    prompt_service,
-    config_getter: Callable[[], "SubAgentConfig"],
-    role_provider: Callable[[], Role],
-) -> ToolDefinition:
-    """构建 ``ask_subagents`` 工具（批量并行派发）。
+def build_subagents_tool() -> ToolDefinition:
+    """构建 ``ask_subagents`` 工具 schema（批量并行；执行在 AgentLoop 合成分支）。
 
-    参数 ``intents`` 必填、非空、长度 ≤ ``config_getter().max_parallel_subagents``，
+    参数 ``intents`` 必填、非空、长度 ≤ ``config.max_parallel_subagents``，
     超限/为空整体拒绝；``tools`` 语义同单个工具，所有子 Agent 共享同一工具集
-    （不支持按 intent 单独指定）。
+    （不支持按 intent 单独指定）。校验与执行均在 AgentLoop 合成分支完成。
     """
-
-    async def _handler(**kwargs: Any) -> dict:
-        intents: Any = kwargs.get("intents", [])
-        if isinstance(intents, str):
-            # 容错：LLM 可能把单个意图传成字符串。
-            intents = [intents] if intents else []
-        if not intents:
-            logger.warning("ask_subagents 参数校验失败：intents 为空")
-            return {"success": False, "error": "intents 不能为空"}
-
-        cfg = config_getter()  # 每次调用读取，热更新立即生效
-        if len(intents) > cfg.max_parallel_subagents:
-            logger.warning(
-                "ask_subagents 参数校验失败：intents 数量 %d 超限（上限 %d）",
-                len(intents),
-                cfg.max_parallel_subagents,
-            )
-            return {
-                "success": False,
-                "error": f"intents 数量超限: {len(intents)}（上限 {cfg.max_parallel_subagents}）",
-            }
-
-        requested = kwargs.get("tools")
-        role = role_provider()
-        try:
-            # 严格校验：任一非法名 → 整体拒绝，绝不静默过滤。
-            _resolve_toolset(registry, role, requested)
-        except ValueError as exc:
-            logger.warning("ask_subagents 工具集校验失败：%s", exc)
-            return {"success": False, "error": str(exc)}
-
-        logger.info(
-            "ask_subagents 批量派发：%d 个意图，角色 %s",
-            len(intents),
-            role.value,
-        )
-        runner = _make_runner(
-            ctx, registry, prompt_service, config_getter, role, requested=requested
-        )
-        # 每个 _run_one 为独立 SubAgentLoop 实例；gather 不抛异常。
-        results = await asyncio.gather(*(runner(i) for i in intents))
-
-        failed = [r["error"] for r in results if not r["success"] and r.get("error")]
-        return {
-            "success": all(r["success"] for r in results),
-            "answers": [
-                {
-                    "intent": i,
-                    "answer": r["answer"],
-                    "rounds": r["rounds"],
-                    "max_rounds_reached": r["max_rounds_reached"],
-                    "success": r["success"],
-                    "error": r["error"],
-                }
-                for i, r in zip(intents, results)
-            ],
-            "total_rounds": sum(r["rounds"] for r in results),
-            "error": "; ".join(failed) if failed else None,
-        }
-
     description = (
         "一次并行派发多个子 Agent（上限 max_parallel_subagents，默认 3），"
         "各自独立完成后合并答案返回。所有子 Agent 共享同一工具集"
@@ -315,7 +180,7 @@ def build_subagents_tool(
             },
             "required": ["intents"],
         },
-        handler=_handler,
+        handler=_guard_handler("ask_subagents"),
         visibility="discoverable",
         min_role=Role.USER,
     )

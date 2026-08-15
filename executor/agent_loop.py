@@ -8,6 +8,12 @@ essential 与 discoverable 工具每轮全部直接暴露给 LLM，不做
 list_tools / get_tool_schema 的按需发现仪式，避免「发现结果与
 可调用集不一致」导致的 tool-not-found 空转。
 
+子 Agent 派发（``ask_subagent`` / ``ask_subagents``）是 **Agent 引擎的内建
+能力**（合成工具分支）：执行引擎 ``SubAgentLoop``（本包 ``subagent.py``）与
+主循环同居执行层，工具层（``tools/agent/subagent_tool.py``）只提供 schema 与
+工具集规则，不 import executor——「子 Agent 也是 Agent」，工具经合成分支
+「告诉」引擎派发，而非自己实例化引擎（依赖方向 ``executor → tools`` 单向）。
+
 工具在呈现和执行两个环节均按调用者角色过滤。
 """
 
@@ -21,9 +27,11 @@ from datetime import datetime
 from typing import Any, TYPE_CHECKING
 
 from ..bus.messages import CommandKind, TaskCommand
+from ..config import SubAgentConfig
 from ..permission import Role
 from ..prompt.manager import PromptManager
 from ..domain.task_record import TaskRecord, TaskStatus
+from ..tools.agent.subagent_tool import resolve_toolset
 from ..tools.registry import (
     ToolRegistry,
     ToolDefinition,
@@ -33,6 +41,7 @@ from ..tools.synthetic.discovery import (
     handle_list_tools,
     handle_get_tool_schema,
 )
+from .subagent import SubAgentLoop
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +83,7 @@ class AgentLoop:
         prompt_manager: PromptManager | None = None,
         prompt_service: Any | None = None,
         command_bus: Any,
+        subagent_config_getter: Callable[[], SubAgentConfig] | None = None,
     ) -> None:
         """初始化 AgentLoop 实例。
 
@@ -92,6 +102,8 @@ class AgentLoop:
             prompt_manager: 可选 — PromptManager 实例（用于模板化提示词）。
             prompt_service: 可选 — PromptService 实例（builder 模式构建提示词）。
             command_bus: TaskCommandBus 实例（用于跨组件命令通信）。
+            subagent_config_getter: 可选 — 子 Agent 配置读取器（每次派发时调用，
+                热更新立即生效）；缺省用 ``SubAgentConfig()`` 默认值。
         """
         self._ctx = ctx
         self._registry = registry
@@ -104,6 +116,7 @@ class AgentLoop:
         self._prompt_manager = prompt_manager
         self._prompt_service = prompt_service
         self._command_bus = command_bus
+        self._subagent_config_getter = subagent_config_getter
 
         # run() 期间赋值 — 供类方法使用
         self._task: TaskRecord | None = None
@@ -231,6 +244,144 @@ class AgentLoop:
 
         reply = task.take_user_reply()
         return {"success": True, "reply": reply}
+
+    # ── 子 Agent 派发（合成工具分支）──────────────────────────────────
+    # 「子 Agent 也是 Agent」：ask_subagent / ask_subagents 的执行是引擎
+    # 内建能力，工具层（tools/agent/subagent_tool.py）只提供 schema 与
+    # 工具集规则；本分支在分发处拦截两个工具名，实例化 SubAgentLoop
+    # （executor 内部），取消传导直读主循环 is_cancelled（不经 ContextVar）。
+
+    def _subagent_config(self) -> SubAgentConfig:
+        """读取子 Agent 配置（每次派发时调用，热更新立即生效）。"""
+        if self._subagent_config_getter is not None:
+            return self._subagent_config_getter()
+        return SubAgentConfig()
+
+    async def _execute_tool_via_registry(
+        self, name: str, role: Role, args: dict[str, Any]
+    ) -> dict[str, Any]:
+        """经注册表执行子 Agent 的工具调用（剥离保留参数名防关键字冲突）。"""
+        call_args = {
+            k: v for k, v in args.items() if k not in ("name", "role")
+        }
+        return await self._registry.execute(name, role, **call_args)
+
+    def _make_subagent_loop(
+        self,
+        defs: list[ToolDefinition],
+        role: Role,
+        cfg: SubAgentConfig,
+    ) -> SubAgentLoop:
+        """构造子 Agent 循环实例（取消传导直读主循环 ``is_cancelled``）。"""
+        return SubAgentLoop(
+            ctx=self._ctx,
+            tools=defs,
+            role=role,
+            prompt_service=self._prompt_service,
+            max_rounds=cfg.max_rounds,
+            max_result_chars=cfg.max_result_chars,
+            should_cancel=lambda: self.is_cancelled,
+            execute_tool=self._execute_tool_via_registry,
+        )
+
+    async def _run_subagent(
+        self, task: TaskRecord, args: dict[str, Any]
+    ) -> dict[str, Any]:
+        """执行 ``ask_subagent`` 工具（合成分支）：单子 Agent 派发。
+
+        校验（intent 必填、工具集严格校验）与执行均在本分支完成；
+        返回 SubAgentLoop 的完整 5 键结果 dict。
+        """
+        intent: str = args.get("intent", "")
+        if not intent:
+            return {"success": False, "error": "缺少必需参数: intent"}
+        role = self._get_role()
+        requested = args.get("tools")
+        try:
+            defs = resolve_toolset(self._registry, role, requested)
+        except ValueError as exc:
+            return {"success": False, "error": str(exc)}
+        cfg = self._subagent_config()
+        logger.info(
+            "任务 %s ask_subagent 派发：意图 %.80r，角色 %s",
+            task.id, intent, role.value,
+        )
+        try:
+            loop = self._make_subagent_loop(defs, role, cfg)
+            return await loop.run(intent)
+        except Exception as exc:
+            logger.exception(
+                "任务 %s ask_subagent 子循环异常：%s", task.id, str(exc)[:200],
+            )
+            return {
+                "success": False,
+                "answer": "",
+                "rounds": 0,
+                "max_rounds_reached": False,
+                "error": str(exc),
+            }
+
+    async def _run_subagents(
+        self, task: TaskRecord, args: dict[str, Any]
+    ) -> dict[str, Any]:
+        """执行 ``ask_subagents`` 工具（合成分支）：批量并行派发 + 合并。
+
+        校验（intents 非空、数量不超限、工具集严格校验）均在本分支完成；
+        合并格式与单派一致：``answers`` 逐项、``total_rounds`` 求和、
+        顶层 ``success`` 取全部项与，失败项错误以 ``"; "`` 聚合。
+        """
+        intents: Any = args.get("intents", [])
+        if isinstance(intents, str):
+            # 容错：LLM 可能把单个意图传成字符串。
+            intents = [intents] if intents else []
+        if not intents:
+            return {"success": False, "error": "intents 不能为空"}
+
+        cfg = self._subagent_config()  # 每次调用读取，热更新立即生效
+        if len(intents) > cfg.max_parallel_subagents:
+            return {
+                "success": False,
+                "error": (
+                    f"intents 数量超限: {len(intents)}"
+                    f"（上限 {cfg.max_parallel_subagents}）"
+                ),
+            }
+
+        role = self._get_role()
+        requested = args.get("tools")
+        try:
+            defs = resolve_toolset(self._registry, role, requested)
+        except ValueError as exc:
+            return {"success": False, "error": str(exc)}
+        logger.info(
+            "任务 %s ask_subagents 批量派发：%d 个意图，角色 %s",
+            task.id, len(intents), role.value,
+        )
+
+        async def _run_one(intent: str) -> dict[str, Any]:
+            loop = self._make_subagent_loop(defs, role, cfg)
+            return await loop.run(intent)
+
+        # 每个 _run_one 为独立 SubAgentLoop 实例；gather 不抛异常。
+        results = await asyncio.gather(*(_run_one(i) for i in intents))
+
+        failed = [r["error"] for r in results if not r["success"] and r.get("error")]
+        return {
+            "success": all(r["success"] for r in results),
+            "answers": [
+                {
+                    "intent": i,
+                    "answer": r["answer"],
+                    "rounds": r["rounds"],
+                    "max_rounds_reached": r["max_rounds_reached"],
+                    "success": r["success"],
+                    "error": r["error"],
+                }
+                for i, r in zip(intents, results)
+            ],
+            "total_rounds": sum(r["rounds"] for r in results),
+            "error": "; ".join(failed) if failed else None,
+        }
 
     # ── 指令注入消费 ───────────────────────────────────────────────────
 
@@ -540,6 +691,10 @@ class AgentLoop:
                         )
                     elif name == "ask_user":
                         tool_result = await self._handle_ask_user(task, args)
+                    elif name == "ask_subagent":
+                        tool_result = await self._run_subagent(task, args)
+                    elif name == "ask_subagents":
+                        tool_result = await self._run_subagents(task, args)
                     else:
                         # LLM 可能在 arguments 中夹带保留参数名（name/role），
                         # 直接解包会导致 execute(name, role, **args) 关键字

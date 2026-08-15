@@ -134,23 +134,26 @@ class TestSubagentRegistration:
 
 class TestSubagentHotReload:
     @pytest.mark.asyncio
-    async def test_ask_subagents_limit_hot_reloads_without_reregistration(
+    async def test_update_config_does_not_require_reregistration(
         self, manager: TaskManager, registry: ToolRegistry,
     ) -> None:
-        """update_config 后已注册的 handler 立即读到新上限（config_getter 不缓存）。"""
+        """update_config 后无需重新注册：schema 为静态定义，注册不依赖配置快照。
+
+        子 Agent 配置（max_rounds / max_result_chars / max_parallel_subagents）
+        的读取已移至 AgentLoop 合成分支（executor/agent_loop.py），经
+        AgentExecutor 注入的 config getter 每次执行时读取最新配置——热更新
+        生效的验证见 tests/test_agent_loop_subagent.py 的
+        test_single_reads_injected_config_hot（工具 handler 不再承担执行/校验）。
+        """
         await manager.setup()
         tool = registry.get("ask_subagents")
         assert tool is not None
 
-        # 热更新：上限 3 → 2
+        # 热更新：上限 3 → 2（注册表保持同一工具实例，无需重新 setup）
         manager.update_config(
             MaibotAgentConfig(subagent=SubAgentConfig(max_parallel_subagents=2))
         )
 
-        result = await tool.handler(intents=["查A", "查B", "查C"])
-
-        assert result["success"] is False
-        assert "超限" in result["error"], f"应报超限错误，实际 {result['error']}"
-        assert "3" in result["error"] and "2" in result["error"], (
-            f"错误信息应含数量与上限，实际 {result['error']}"
-        )
+        assert registry.get("ask_subagents") is tool
+        # schema 不随配置变化（执行期配置读取在 AgentLoop 分支）
+        assert tool.parameters["required"] == ["intents"]

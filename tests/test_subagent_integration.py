@@ -105,10 +105,7 @@ def registry(
             name=name, description=name, parameters={"type": "object", "properties": {}},
             handler=_noop_handler, visibility="discoverable", min_role=Role.USER,
         ))
-    reg.register(build_subagent_tool(
-        ctx=mock_ctx, registry=reg, prompt_service=prompt_service,
-        config_getter=lambda: SubAgentConfig(), role_provider=lambda: Role.USER,
-    ))
+    reg.register(build_subagent_tool())
     return reg
 
 
@@ -295,7 +292,7 @@ class TestSubAgentCancelPropagation:
         self, real_store: TaskStore, mock_ctx: MockCtx, registry: ToolRegistry,
         prompt_service: Any, command_bus: Any,
     ) -> None:
-        """主任务经 AgentExecutor.execute 运行（current_cancel_check 生效）。
+        """主任务经 AgentExecutor.execute 运行（取消经合成分支注入 is_cancelled 传导）。
 
         子 Agent 运行期间（阻塞在 gate_tool 内）经真实 command_bus 发送
         CANCEL（模拟 scheduler.cancel 的

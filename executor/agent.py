@@ -12,11 +12,10 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from contextvars import Token
 from typing import Any
 
 from .agent_loop import AgentLoop
-from .context import current_cancel_check, current_task, make_role_provider
+from .context import current_task, make_role_provider
 from ..permission import Role
 from ..domain.task_record import TaskRecord
 from .base import ExecutionContext, ExecutionResult
@@ -80,7 +79,6 @@ class AgentExecutor:
         # 将当前任务写入上下文变量；finally 中恢复，避免泄漏到其他任务。
         token = current_task.set(task)
         logger.info("开始执行 Agent 任务 %s（等级 %s）", task.id, task.level.value)
-        cc_token: Token | None = None
         try:
             role_provider = self._make_role_provider(task)
 
@@ -90,6 +88,13 @@ class AgentExecutor:
             on_task_done = None
             if scheduler is not None and callable(getattr(scheduler, "on_task_completed", None)):
                 on_task_done = scheduler.on_task_completed
+
+            # 子 Agent 配置读取器：绑定本次 execute 的 config（exec_ctx 每次
+            # 执行时由编排层按最新配置构建），热更新对新任务立即生效。
+            subagent_config_getter = None
+            exec_config = getattr(ctx, "config", None)
+            if exec_config is not None and getattr(exec_config, "subagent", None) is not None:
+                subagent_config_getter = lambda: exec_config.subagent
 
             # 将构造时注入的依赖转发给 AgentLoop。
             loop = AgentLoop(
@@ -103,11 +108,12 @@ class AgentExecutor:
                 prompt_manager=self._prompt_manager or ctx.prompt_manager,
                 prompt_service=self._prompt_service or ctx.prompt_service,
                 command_bus=self._command_bus,
+                subagent_config_getter=subagent_config_getter,
             )
             # run() 内部完成状态流转（终态）与落库，并触发调度器通知；
             # 正常返回即任务已成功结束。
-            # 将取消检查回调写入上下文变量，供子 Agent 循环读取主循环取消状态。
-            cc_token = current_cancel_check.set(lambda: loop.is_cancelled)
+            # 子 Agent 循环的取消传导由 AgentLoop 合成分支直读 is_cancelled
+            # 注入（不再经 ContextVar 间接层，见 _make_subagent_loop）。
             logger.info("AgentLoop 启动：任务 %s", task.id)
             await loop.run(task)
             logger.info("任务 %s 执行完成（AgentLoop 退出）", task.id)
@@ -120,8 +126,6 @@ class AgentExecutor:
         finally:
             # 恢复上下文变量，避免泄漏到并发中的其他任务。
             current_task.reset(token)
-            if cc_token is not None:
-                current_cancel_check.reset(cc_token)
 
     # ── 辅助方法 ────────────────────────────────────────────────────────
 
