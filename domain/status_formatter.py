@@ -24,12 +24,13 @@ class StatusFormatter:
     """将 (TaskStatus, timestamp) 转为中文状态描述字符串。
 
     Args:
-        now: 参考时间（默认 ``datetime.now()``），用于计算相对时长；
-             单元测试可注入固定时间戳以保持确定性。
+        now: 可选的默认参考时间；为 None 时每次 ``format()`` 调用都取
+             ``datetime.now()``（长期持有的实例不会冻结时钟）。单元测试
+             可注入固定时间戳以保持确定性。
     """
 
     def __init__(self, now: datetime | None = None) -> None:
-        self._now = now or datetime.now()
+        self._now = now  # 可为 None：format() 时再取当前时间
 
     # ── 状态格式化 ────────────────────────────────────────────────
 
@@ -49,7 +50,9 @@ class StatusFormatter:
             - WAITING_INPUT + updated_at → ``"已等待 1 分钟"``
             - 静态状态 → ``"排队中"``
         """
-        now = self._now  # 参考时间在构造时固定，实例内多次格式化口径一致
+        # 参考时间每次调用时取值：长期持有的实例（如 TaskManager 单例）不会
+        # 以构造时刻为基准计算相对时长；测试注入的固定时间仍优先。
+        now = self._now or datetime.now()
 
         if status == TaskStatus.RUNNING:
             if relevant_ts is not None:

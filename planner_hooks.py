@@ -15,7 +15,6 @@ import re
 from typing import Any
 
 from .config import PlannerBoardConfig
-from .domain.status_formatter import StatusFormatter
 from .domain.task_record import TaskRecord, TaskStatus
 from .domain.task_store import TaskStore
 
@@ -55,7 +54,6 @@ class PlannerBoard:
         self._store = store
         self._config = config
         self._logger = logger or logging.getLogger(__name__)
-        self._sfmt = StatusFormatter()
         self._last_hash: dict[str, str] = {}
         self._prompt_service = prompt_service
         self._logger.info(
