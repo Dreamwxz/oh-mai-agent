@@ -1,0 +1,90 @@
+# oh-mai-agent 文档站点配置（MkDocs Material，部署到 GitHub Pages）
+#
+# 本地预览：
+#   uv run --with mkdocs-material mkdocs serve
+# 本地构建（strict 模式，与 CI 一致）：
+#   uv run --with mkdocs-material mkdocs build --strict
+#
+# site_url 由 CI 注入（SITE_URL 环境变量），本地未设置时回退到默认值。
+
+site_name: oh-mai-agent
+site_description: MaiBot 离线多线程 Agent 插件 —— 任务分级管理、定时调度、MCP 工具、跨插件协作
+site_url: !ENV [SITE_URL, https://Dreamwxz.github.io/oh-mai-agent/]
+repo_url: https://github.com/Dreamwxz/oh-mai-agent
+repo_name: Dreamwxz/oh-mai-agent
+edit_uri: blob/main/docs/
+
+theme:
+  name: material
+  language: zh
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: 切换深色模式
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: 切换浅色模式
+
+plugins:
+  - search:
+      lang:
+        - zh
+        - en
+
+markdown_extensions:
+  - admonition
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+
+copyright: Copyright &copy; 2025 Dreamwxz — GPL-3.0
+
+nav:
+  - 首页: index.md
+  - 使用指南:
+      - 命令使用指南（Command）: guide/commands.md
+      - MCP 使用指南: guide/mcp.md
+  - 生命周期总览: LIFECYCLE.md
+  - 功能文档:
+      - 任务模型: features/01-task-model.md
+      - 调度器: features/02-scheduler.md
+      - 持久化与恢复: features/03-persistence-recovery.md
+      - 权限模型与 API 暴露层: features/04-permission.md
+      - 工具系统: features/05-tools.md
+      - 回复润色与发送: features/06-polish.md
+      - AI 提问（ask_user）: features/07-ask-user.md
+      - MCP 工具集成: features/08-mcp.md
+      - Planner 看板: features/09-planner-board.md
+      - 跨插件 API 与动态工具生成: features/10-cross-plugin-api.md
+      - 命令总线: features/11-command-bus.md
+      - 提示词系统: features/12-prompt.md
+      - 命令系统: features/13-commands.md
+      - 配置体系: features/14-config.md
+      - 子 Agent: features/15-subagent.md
+      - 命令执行（Shell）: features/16-shell.md
+  - 提示词写作规范: prompt-style-guide.md
+  - 历史归档:
+      - 设计文档: history/DESIGN.md
+      - 实施计划: history/IMPLEMENTATION_PLAN.md
+      - 重构方案: history/REFACTOR_PLAN.md
+      - 子进程架构扩展点: history/SUBPROCESS_README.md

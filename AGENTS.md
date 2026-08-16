@@ -65,12 +65,12 @@ agent_system / title / polish / planner_board / injection / context_note / subag
 | 目录 | 用途 |
 |---|---|
 | [README.md](README.md) | 用户入口：安装 / 配置速查 / 命令用法 / 功能索引 |
-| [docs/](docs/) | LIFECYCLE 生命周期总览 + features/（15 份功能文档）+ history/（4 份归档） |
+| [docs/](docs/) | LIFECYCLE 生命周期总览 + features/（16 份功能文档）+ history/（4 份归档）；`mkdocs.yml` 配置文档站（GitHub Pages），`.github/workflows/docs.yml` 自动构建部署 |
 | [tests/](tests/) | 测试：58 文件 999 个测试函数，pytest 验证 0 失败 + 文档引用检查（test_doc_links.py） |
 
 **目录结构**（散文式，不用多级缩进树）：
 
-- 根目录单文件模块：`plugin.py`（入口，注册 11 个 @Tool / 7 @Command）、`config.py`（10 节配置）、
+- 根目录单文件模块：`plugin.py`（入口，注册 11 个 @Tool / 7 @Command）、`config.py`（12 节配置）、
   `permission.py`、`api_expose.py`、`planner_hooks.py`、`commands.py`、`lifecycle.py`
   （唯一组装点，load_plugin 编排全部依赖）、`_manifest.json`
 - `bus/`：命令总线，消息类型（`bus/messages.py` 纯 dataclass）+ TaskCommandBus 命令路由
@@ -84,7 +84,7 @@ agent_system / title / polish / planner_board / injection / context_note / subag
 - `prompt/`：提示词系统，manager / service / base + builders/（7）+ templates/（7 中文模板）
 - `tools/`：工具系统三通道（agent 循环工具（含子 Agent 工具 `subagent_tool.py`）/ planner @Tool 工厂 / synthetic 发现工具）+ 发送工具共用实现 `tools/send_message.py` + MCP 工具提供方（tools/mcp/）
 - `tests/`：测试（58 文件，999+ 测试函数，0 失败）+ 文档引用检查（test_doc_links.py）
-- `docs/` + `data/`：功能文档（15 + LIFECYCLE + 4 归档）与运行时数据（gitignored）
+- `docs/` + `data/`：功能文档（16 + LIFECYCLE + 4 归档）与运行时数据（gitignored）
 
 > 依赖方向：root（plugin.py/lifecycle.py 组装根）→ core（编排）→ executor（执行）→ {tools, prompt, bus} → domain。
 > `config.py` / `permission.py` 是**共享叶子层**：虽物理位于根目录，实际被全部层级 import

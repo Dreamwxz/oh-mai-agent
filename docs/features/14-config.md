@@ -14,17 +14,17 @@
 
 ### Pydantic 数据模型
 
-配置模型全部定义在 `config.py`，共 12 个 Pydantic 类，分三层：
+配置模型全部定义在 `config.py`，共 14 个 Pydantic 类，分三层：
 
-- **10 个配置节类**，对应 `config.toml` 的 10 个节：`PluginSection`（config.py:32）、`PermissionConfig`（:56）、`TaskConfig`（:109）、`PlannerBoardConfig`（:153）、`PolishConfig`（:197）、`SplitterConfig`（:214）、`MCPConfig`（:319）、`ApiExposeConfig`（:375）、`SearchConfig`（:392）、`SubAgentConfig`（:409）。
-- **1 个嵌套模型** `MCPServerConfig`（config.py:251），描述单个 MCP 服务器，作为 `MCPConfig.servers` 列表的元素。
-- **1 个根模型** `MaibotAgentConfig`（config.py:492），聚合上述 10 节，是插件对外声明的完整配置。
+- **12 个配置节类**，对应 `config.toml` 的 12 个节：`PluginSection`（config.py:32）、`PermissionConfig`（:56）、`TaskConfig`（:109）、`PlannerBoardConfig`（:153）、`PolishConfig`（:184）、`SplitterConfig`（:201）、`SendConfig`（:238）、`MCPConfig`（:324）、`ApiExposeConfig`（:380）、`SearchConfig`（:397）、`SubAgentConfig`（:414）、`ShellConfig`（:460）。
+- **1 个嵌套模型** `MCPServerConfig`（config.py:256），描述单个 MCP 服务器，作为 `MCPConfig.servers` 列表的元素。
+- **1 个根模型** `MaibotAgentConfig`（config.py:497），聚合上述 12 节，是插件对外声明的完整配置。
 
 每个类继承 `maibot_sdk.PluginConfigBase`。字段用 `Field(default=..., description=...)` 声明默认值和中文描述，`json_schema_extra` 提供 WebUI 表单的中文 `label` / `hint`（无 label 时 WebUI 回退显示英文字段名），`__ui_label__` 提供 WebUI 表单的分组名。`Literal[...]` 类型（如 `transport`、`max_level`）会让 WebUI 渲染成下拉框。
 
 ### config.toml 生成与校验
 
-`plugin.py:42` 将 `MaibotAgentConfig` 声明为插件的 `config_model`。Runner 启动时读取该模型，做三件事：
+`plugin.py:68` 将 `MaibotAgentConfig` 声明为插件的 `config_model`。Runner 启动时读取该模型，做三件事：
 
 1. 若 `config.toml` 不存在，用模型默认值补齐生成；
 2. 校验已有文件的字段类型和结构；
@@ -34,7 +34,7 @@
 
 ### 热更新
 
-配置变更无需重启插件。SDK 在调用 `on_config_update`（plugin.py:68）前已刷新 `plugin.config`，插件侧由 `apply_config_update`（lifecycle.py:160-217）把新值传播到运行时组件：
+配置变更无需重启插件。SDK 在调用 `on_config_update`（plugin.py:94）前已刷新 `plugin.config`，插件侧由 `apply_config_update`（lifecycle.py:161-217）把新值传播到运行时组件：
 
 1. 重建 `PermissionResolver`，权限变更立即生效；
 2. `scheduler.update_config` 更新并发上限与超时参数；
@@ -46,9 +46,9 @@
 
 ## 使用与配置
 
-### 10 节配置项详解
+### 12 节配置项详解
 
-以下按 10 个配置节列出全部字段。配置键与 `config.py` 字段一一对应。
+以下按 12 个配置节列出全部字段。配置键与 `config.py` 字段一一对应。
 
 #### `[plugin]` — 插件
 
@@ -175,5 +175,5 @@ MCP 工具进入 Agent 工具集的 Discoverable 层，按权限过滤。不支�
 
 ### 已知限制
 
-- **`default_timeout_min` 已配置但未执行**（config.py:124-131）。`TaskConfig.default_timeout_min` 声明了 `ask_user` 无回复挂起等待时间的意图，但调度器未读取该值：`waiting_input` 状态的任务不因超时而自动取消或推进，而是永久挂起直到用户回复或手动取消。
-- **`api_expose.max_level` 声明未执行**（config.py:354-361）。`ApiExposeConfig.max_level` 声明了暴露等级约束，但 `api_expose.py` 的 `build_api_handlers()` 未读取该值做调用方过滤，6 个端点全部 `public=True`。用户将 `max_level` 设为 `"admin"` 不会改变实际行为。
+- **`default_timeout_min` 已配置但未执行**（config.py:133）。`TaskConfig.default_timeout_min` 声明了 `ask_user` 无回复挂起等待时间的意图，但调度器未读取该值：`waiting_input` 状态的任务不因超时而自动取消或推进，而是永久挂起直到用户回复或手动取消。
+- **`api_expose.max_level` 声明未执行**（config.py:386）。`ApiExposeConfig.max_level` 声明了暴露等级约束，但 `api_expose.py` 的 `build_api_handlers()` 未读取该值做调用方过滤，6 个端点全部 `public=True`。用户将 `max_level` 设为 `"admin"` 不会改变实际行为。

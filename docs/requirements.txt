@@ -1,0 +1,3 @@
+# 文档站构建依赖（仅 GitHub Actions / 本地构建文档站使用，与插件运行时依赖分离）
+mkdocs>=1.6,<2.0
+mkdocs-material>=9.5,<10.0
