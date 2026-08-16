@@ -11,7 +11,7 @@
   "urls": {
     "repository": "https://github.com/Dreamwxz/oh-mai-agent",
     "homepage": "https://github.com/Dreamwxz",
-    "documentation": "https://github.com/Dreamwxz/oh-mai-agent",
+    "documentation": "https://dreamwxz.github.io/oh-mai-agent/",
     "issues": "https://github.com/Dreamwxz/oh-mai-agent/issues"
   },
   "host_application": {
@@ -65,5 +65,5 @@
     "default_locale": "zh-CN",
     "supported_locales": ["zh-CN"]
   },
-  "id": "oh-mai-agent"
+  "id": "github.dreamwxz.oh-mai-agent"
 }

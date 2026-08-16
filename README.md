@@ -8,7 +8,7 @@
 
 ## 文档
 
-<https://Dreamwxz.github.io/oh-mai-agent/>
+<https://dreamwxz.github.io/oh-mai-agent/>
 
 ## License
 
