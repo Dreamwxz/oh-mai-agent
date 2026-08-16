@@ -448,6 +448,45 @@ class ReplySender:
         except Exception:
             logger.warning("XML 动机注释写入失败，流=%s", stream_id, exc_info=True)
 
+    async def append_task_waiting_note(
+        self, stream_id: str, title: str, question: str
+    ) -> None:
+        """任务进入等待输入时写入上下文注释（``context_note`` kind=task-waiting）。
+
+        对用户不可见，写给 MaiBot / Planner 的上下文 —— 任务挂起等待
+        用户回复时留痕（含任务标题与问题文本），使 Planner 即使跨多轮
+        对话也能理解"某条用户回复是在回答哪个任务的提问"。任何失败仅告警。
+
+        Args:
+            stream_id: 任务所在聊天流 ID。
+            title: 任务标题。
+            question: 任务向用户提出的问题文本。
+        """
+        if self._prompt_service is None:
+            return
+        try:
+            note_id = f"oh-mai-agent:task-waiting:{int(time.time() * 1000)}"
+            note_text = self._prompt_service.build(
+                "context_note",
+                kind="task-waiting",
+                title=title,
+                question=question,
+                id=note_id,
+                # 主程序 [bot].nickname：缺省空串（builder 兜底"麦麦"）
+                bot_name=str(await self._ctx.config.get("bot.nickname", "") or ""),
+            )
+            await self._ctx.maisaka.context.append(
+                stream_id=stream_id,
+                segments=[{"type": "text", "content": note_text}],
+                visible_text=note_text,
+                message_id=note_id,
+                source_kind="plugin:oh-mai-agent:task-waiting",
+            )
+        except Exception:
+            logger.warning(
+                "任务等待注释写入失败，流=%s", stream_id, exc_info=True
+            )
+
     # ── 内部 ───────────────────────────────────────────────────────────
 
     def _split(self, text: str) -> list[str]:

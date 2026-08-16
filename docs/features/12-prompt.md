@@ -27,9 +27,9 @@
 | `AgentSystemBuilder` | `agent_system` | Agent 循环的 system prompt，注入任务标题、意图与机器人昵称 | `agent_system.md` |
 | `TitleBuilder` | `title` | LLM 生成 15 字内标题 | `title.md` |
 | `PolishBuilder` | `polish` | 回复润色的 system prompt，注入聊天上下文、黑话表、原始结果、主程序人格/表达风格与昵称 | `polish.md` |
-| `PlannerBoardBuilder` | `planner_board` | Planner 看板 XML 块，注入活跃/定时/最近任务 | `planner_board.md` |
+| `PlannerBoardBuilder` | `planner_board` | Planner 看板 XML 块，含插件简介段与待回复待办段 | `planner_board.md` |
 | `InjectionMessageBuilder` | `injection` | 指令注入的 system 消息格式化 | `injection.md` |
-| `ContextNoteBuilder` | `context_note` | 跨流/长时任务的动机小提示 | `context_note.md` |
+| `ContextNoteBuilder` | `context_note` | 上下文记录（发送消息 / 任务回复 / 任务等待输入） | `context_note.md` |
 | `SubAgentSystemBuilder` | `subagent_system` | 子 Agent 的 system prompt，注入意图、工具列表与机器人昵称 | `subagent_system.md` |
 
 每个 builder 的 `build(ctx)` 都从 `ctx.task` / `ctx.data` 提取参数，调用 `self._pm.render(name, ...)` 渲染对应模板。**XML 转义在 builder 侧完成**：injection / context_note 在把变量传入模板前先经 `xml.sax.saxutils.escape` 转义（如 `context_note.py:60-65`），防止注入内容拆出 XML 块；模板侧 `autoescape=False`，不会二次转义。二者分工明确。

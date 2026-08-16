@@ -89,6 +89,13 @@ class AgentExecutor:
             if scheduler is not None and callable(getattr(scheduler, "on_task_completed", None)):
                 on_task_done = scheduler.on_task_completed
 
+            # 任务等待输入留痕回调：绑定 ReplySender.append_task_waiting_note，
+            # 在 ask_user 挂起时写入对用户不可见的上下文注释（含问题文本）。
+            on_waiting_note = None
+            sender = getattr(ctx, "sender", None)
+            if sender is not None and callable(getattr(sender, "append_task_waiting_note", None)):
+                on_waiting_note = sender.append_task_waiting_note
+
             # 子 Agent 配置读取器：绑定本次 execute 的 config（exec_ctx 每次
             # 执行时由编排层按最新配置构建），热更新对新任务立即生效。
             subagent_config_getter = None
@@ -102,6 +109,7 @@ class AgentExecutor:
                 registry=self._registry,
                 store=ctx.store,
                 on_ask=self._on_ask,
+                on_waiting_note=on_waiting_note,
                 role_provider=role_provider,
                 send_final=self._send_final,
                 on_task_done=on_task_done,

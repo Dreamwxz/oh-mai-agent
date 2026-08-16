@@ -30,9 +30,8 @@
    "path": "planner_board.md",
    "variables": [
     "session_id",
-    "active",
-    "scheduled",
-    "recent"
+    "show_intro",
+    "waiting"
    ]
   },
   "injection": {
@@ -47,6 +46,8 @@
    "variables": [
     "kind",
     "content",
+    "title",
+    "question",
     "note_id",
     "bot_name"
    ]

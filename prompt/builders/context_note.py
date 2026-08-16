@@ -17,11 +17,13 @@ logger = logging.getLogger(__name__)
 class ContextNoteBuilder(PromptBuilder):
     """构建上下文注入注释的 XML 标签。
 
-    两种注释格式（模板按 kind 分支渲染）：
+    三种注释格式（模板按 kind 分支渲染）：
     - sent-message: 插件在此流发送了消息
     - task-reply: 插件此前在此流发送了任务消息
+    - task-waiting: 后台子代理任务正在等待用户回复（含任务标题与问题文本）
 
-    ctx.data 参数：kind 必填（限以上两者）；content 缺省为空串；
+    ctx.data 参数：kind 必填（限以上三者）；content 缺省为空串；
+    title / question 仅在 task-waiting 时使用，缺省为空串；
     id 缺省时自动生成毫秒时间戳唯一标识（调用方通常自带）。
 
     由 PromptService.build("context_note", ...) 调用。
@@ -38,9 +40,10 @@ class ContextNoteBuilder(PromptBuilder):
         kind: str = ctx.data.get("kind", "")
         if not kind:
             raise ValueError("ContextNoteBuilder requires 'kind' in ctx.data")
-        if kind not in ("sent-message", "task-reply"):
+        if kind not in ("sent-message", "task-reply", "task-waiting"):
             raise ValueError(
-                f"ContextNoteBuilder: kind must be 'sent-message' or 'task-reply', got {kind!r}"
+                f"ContextNoteBuilder: kind must be 'sent-message' or 'task-reply' or "
+                f"'task-waiting', got {kind!r}"
             )
 
         if self._pm is None:
@@ -48,6 +51,9 @@ class ContextNoteBuilder(PromptBuilder):
 
         # content 缺省为空串；str() 兜底非字符串取值（如数值 id）
         content: str = str(ctx.data.get("content", ""))
+        # task-waiting 附加字段：任务标题与问题文本
+        title: str = str(ctx.data.get("title", ""))
+        question: str = str(ctx.data.get("question", ""))
         # id 缺省时回退到毫秒时间戳唯一标识（调用方通常自带，如 oh-mai-agent:send:...）
         note_id: str = str(
             ctx.data.get("id")
@@ -57,13 +63,15 @@ class ContextNoteBuilder(PromptBuilder):
         # 缺省兜底"麦麦"（与 MaiBot nickname 默认值一致）。
         bot_name: str = str(ctx.data.get("bot_name", "") or "麦麦")
 
-        # XML 转义保留在 builder：kind/content/note_id/bot_name 传入模板前均已转义，
-        # 模板 autoescape=False，不会二次转义。
+        # XML 转义保留在 builder：kind/content/title/question/note_id/bot_name
+        # 传入模板前均已转义，模板 autoescape=False，不会二次转义。
         # 转义的关键目的是防止 content 注入 </plugin_context_note> 等标签拆出 XML 块。
         return self._pm.render(
             "context_note",
             kind=escape(kind),
             content=escape(content),
+            title=escape(title),
+            question=escape(question),
             note_id=escape(note_id),
             bot_name=escape(bot_name),
         )

@@ -76,6 +76,7 @@ class AgentLoop:
         registry: ToolRegistry,
         store: Any,  # TaskStore – 避免循环导入
         on_ask: Callable[[str, str], Awaitable[None]] | None = None,
+        on_waiting_note: Callable[[str, str, str], Awaitable[None]] | None = None,
         max_rounds: int = 30,
         role_provider: Callable[[], Role] | None = None,
         send_final: Callable[[TaskRecord, str], Awaitable[None]] | None = None,
@@ -92,6 +93,10 @@ class AgentLoop:
             registry: 工具注册中心（含两级呈现）。
             store: 任务持久化存储（TaskStore）。
             on_ask: 可选 — ask_user 提问回调（向用户发送消息）。
+            on_waiting_note: 可选 — 任务进入等待输入时的上下文注释回调
+                （``async def on_waiting_note(stream_id, title, question)``，
+                由执行器注入 ReplySender.append_task_waiting_note，写入
+                对用户不可见的上下文留痕，帮助 Planner 感知等待中的任务）。
             max_rounds: LLM 最大对话轮数（默认 30）。
             role_provider: 可选 — 角色解析回调，默认返回 GUEST。
             send_final: 可选 — 最终结果发送回调。
@@ -109,6 +114,7 @@ class AgentLoop:
         self._registry = registry
         self._store = store
         self._on_ask = on_ask
+        self._on_waiting_note = on_waiting_note
         self._max_rounds = max_rounds
         self._role_provider = role_provider
         self._send_final = send_final
@@ -229,6 +235,16 @@ class AgentLoop:
             # 无回调：无法提问，恢复任务并返回错误（避免无限挂起）
             logger.warning("任务 %s：ask_user 无 on_ask 回调，跳过提问", task.id)
             resume_event.set()
+
+        # 上下文留痕：任务挂起等待输入 → 写入对用户不可见的注释（含问题文本），
+        # 让 Planner 跨轮对话也能感知"这个任务在等用户回复"。失败仅告警，不阻断。
+        if self._on_waiting_note is not None:
+            try:
+                await self._on_waiting_note(task.stream_id, task.title, question)
+            except Exception:
+                logger.warning(
+                    "任务 %s：等待注释写入失败，不影响挂起流程", task.id, exc_info=True
+                )
 
         logger.info("任务 %s 已挂起 waiting_input，等待用户输入（问题：%s）", task.id, question[:80])
         if self._cancelled:

@@ -572,6 +572,84 @@ class TestAgentLoopAskUser:
         # 即使没有 on_ask 也应完成（事件会立即被置位）
         assert task.status == TaskStatus.COMPLETED
 
+    @pytest.mark.asyncio
+    async def test_ask_user_invokes_waiting_note_callback(
+        self, store: TaskStore, mock_ctx: MockCtx, registry: ToolRegistry,
+        prompt_service: Any, command_bus: Any,
+    ) -> None:
+        """任务挂起等待输入时，on_waiting_note 回调被调用（含标题与问题文本）。"""
+        notes: list[tuple[str, str, str]] = []
+        task = make_task("t1", level=TaskLevel.AGENT, status=TaskStatus.PENDING)
+
+        ask_call = {"id": "call-ask", "function": {"name": "ask_user", "arguments": '{"question":"请确认输出格式"}'}}
+        mock_ctx.llm.set_tool_response("question", [ask_call])
+        mock_ctx.llm.set_tool_response("done", [])
+
+        async def on_ask(stream_id: str, question: str) -> None:
+            # 模拟用户回复：保存回复并恢复任务
+            fresh = await store.get("t1")
+            assert fresh is not None
+            fresh.set_user_reply("用JSON")
+            await store.save(fresh)
+            await command_bus.send(TaskCommand(
+                task_id="t1", kind=CommandKind.RESUME_REPLY,
+                payload={"reply": "用JSON"},
+            ))
+
+        async def on_waiting_note(stream_id: str, title: str, question: str) -> None:
+            notes.append((stream_id, title, question))
+
+        loop = AgentLoop(
+            ctx=mock_ctx, registry=registry, store=store,
+            command_bus=command_bus, prompt_service=prompt_service,
+            on_ask=on_ask, on_waiting_note=on_waiting_note,
+            role_provider=lambda: Role.ADMIN,
+        )
+        await loop.run(task)
+
+        assert task.status == TaskStatus.COMPLETED
+        assert len(notes) == 1, f"on_waiting_note 应恰好调用 1 次，实际 {len(notes)}"
+        stream_id, title, question = notes[0]
+        assert stream_id == task.stream_id
+        assert title == task.title
+        assert question == "请确认输出格式"
+
+    @pytest.mark.asyncio
+    async def test_waiting_note_callback_exception_does_not_block(
+        self, store: TaskStore, mock_ctx: MockCtx, registry: ToolRegistry,
+        prompt_service: Any, command_bus: Any,
+    ) -> None:
+        """on_waiting_note 回调抛异常只告警，不阻断挂起/恢复流程。"""
+        task = make_task("t1", level=TaskLevel.AGENT, status=TaskStatus.PENDING)
+
+        ask_call = {"id": "call-ask", "function": {"name": "ask_user", "arguments": '{"question":"确认吗?"}'}}
+        mock_ctx.llm.set_tool_response("question", [ask_call])
+        mock_ctx.llm.set_tool_response("done", [])
+
+        async def on_ask(stream_id: str, question: str) -> None:
+            fresh = await store.get("t1")
+            assert fresh is not None
+            fresh.set_user_reply("OK")
+            await store.save(fresh)
+            await command_bus.send(TaskCommand(
+                task_id="t1", kind=CommandKind.RESUME_REPLY,
+                payload={"reply": "OK"},
+            ))
+
+        async def on_waiting_note(stream_id: str, title: str, question: str) -> None:
+            raise RuntimeError("note write failed")
+
+        loop = AgentLoop(
+            ctx=mock_ctx, registry=registry, store=store,
+            command_bus=command_bus, prompt_service=prompt_service,
+            on_ask=on_ask, on_waiting_note=on_waiting_note,
+            role_provider=lambda: Role.ADMIN,
+        )
+        await loop.run(task)
+
+        # 注释写入失败不影响任务完成
+        assert task.status == TaskStatus.COMPLETED
+
     def test_ask_user_serializable_bomb_repro(self) -> None:
         """回归测试（已知 bug）：在 metadata 中存放 asyncio.Event
         会导致 json.dumps(task.to_dict()) 抛出 TypeError。"""
