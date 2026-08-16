@@ -151,45 +151,32 @@ class TaskConfig(PluginConfigBase):
 
 
 class PlannerBoardConfig(PluginConfigBase):
-    """Planner 看板配置。"""
+    """Planner 看板配置。
+
+    看板只推送「需要 Planner 主动介入」的待办（waiting_input 待用户回复），
+    不再注入运行中/定时/已完成等状态快照——用户询问任务状态一律由
+    subagent_list / subagent_status 等工具按需查询（hook 推事件，工具拉状态）。
+    """
 
     __ui_label__ = "Planner看板"
     __ui_order__ = 3
 
     enabled: bool = Field(
         default=True,
-        description="是否向 Planner 注入任务摘要",
+        description="是否向 Planner 注入待办看板（waiting_input 待用户回复）",
         json_schema_extra={
             "label": "启用看板",
-            "hint": "是否向 Planner 注入任务摘要",
+            "hint": "是否向 Planner 注入待办看板（waiting_input 待用户回复）",
             "order": 0,
         },
     )
-    max_active: int = Field(
+    max_waiting: int = Field(
         default=5,
-        description="活跃任务（running/waiting_input/paused）条数上限",
+        description="待用户回复任务条数上限",
         json_schema_extra={
-            "label": "活跃任务上限",
-            "hint": "活跃任务（running/waiting_input/paused）条数上限",
+            "label": "待回复上限",
+            "hint": "待用户回复任务条数上限（等待最久的优先展示）",
             "order": 1,
-        },
-    )
-    max_scheduled: int = Field(
-        default=3,
-        description="即将触发的定时任务条数上限",
-        json_schema_extra={
-            "label": "定时任务上限",
-            "hint": "即将触发的定时任务条数上限",
-            "order": 2,
-        },
-    )
-    max_recent: int = Field(
-        default=3,
-        description="最近完成任务条数上限",
-        json_schema_extra={
-            "label": "最近任务上限",
-            "hint": "最近完成任务条数上限",
-            "order": 3,
         },
     )
 

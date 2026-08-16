@@ -57,19 +57,15 @@ class TestPlannerBoardConfig:
     def test_defaults(self) -> None:
         cfg = PlannerBoardConfig()
         assert cfg.enabled is True
-        assert cfg.max_active == 5
-        assert cfg.max_scheduled == 3
-        assert cfg.max_recent == 3
+        assert cfg.max_waiting == 5
 
     def test_disabled(self) -> None:
         cfg = PlannerBoardConfig(enabled=False)
         assert cfg.enabled is False
 
     def test_custom_limits(self) -> None:
-        cfg = PlannerBoardConfig(max_active=10, max_scheduled=5, max_recent=5)
-        assert cfg.max_active == 10
-        assert cfg.max_scheduled == 5
-        assert cfg.max_recent == 5
+        cfg = PlannerBoardConfig(max_waiting=10)
+        assert cfg.max_waiting == 10
 
 
 class TestPolishConfig:

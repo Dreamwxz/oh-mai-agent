@@ -195,39 +195,60 @@ class TestPolishBuilder:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class TestPlannerBoardBuilder:
-    def test_empty_when_no_tasks(self) -> None:
+    def test_empty_when_no_intro_and_no_waiting(self) -> None:
         builder = PlannerBoardBuilder()
         prompt = builder.build(PromptContext(data={
-            "session_id": "s1", "active": [], "scheduled": [], "recent": [],
+            "session_id": "s1", "show_intro": False, "waiting": [],
         }))
         assert prompt == ""
 
-    def test_xml_with_active_tasks(self, pm: PromptManager) -> None:
+    def test_intro_section(self, pm: PromptManager) -> None:
+        builder = PlannerBoardBuilder(pm=pm)
+        prompt = builder.build(PromptContext(data={
+            "session_id": "s1", "show_intro": True, "waiting": [],
+        }))
+        assert '<plugin_intro session="s1">' in prompt
+        assert "</plugin_intro>" in prompt
+        assert "后台子代理" in prompt
+        assert "task_board" not in prompt
+
+    def test_waiting_tasks_section(self, pm: PromptManager) -> None:
         from oh_mai_agent.domain.task_record import TaskStatus
-        task = make_task("t1", title="测试任务", status=TaskStatus.RUNNING)
+        task = make_task("t1", title="等待回复任务", status=TaskStatus.WAITING_INPUT)
         builder = PlannerBoardBuilder(pm=pm)
         prompt = builder.build(PromptContext(data={
             "session_id": "s1",
-            "active": [task],
-            "scheduled": [],
-            "recent": [],
+            "show_intro": False,
+            "waiting": [task],
         }))
         assert '<task_board session="s1">' in prompt
         assert "</task_board>" in prompt
-        assert "running" in prompt
-        assert "测试任务" in prompt
+        assert "waiting_input" in prompt
+        assert "等待回复任务" in prompt
+        assert "plugin_intro" not in prompt
 
-    def test_board_lines_include_short_id(self, pm: PromptManager) -> None:
-        """看板每行应带 [id:xxxx] 短 ID，供 Planner 复制到 task_status 等工具。"""
+    def test_intro_and_waiting_together(self, pm: PromptManager) -> None:
         from oh_mai_agent.domain.task_record import TaskStatus
-        task = make_task("abcdef12-3456-7890-abcd-ef1234567890", title="系统环境检查",
-                         status=TaskStatus.RUNNING)
+        task = make_task("t1", title="等待回复任务", status=TaskStatus.WAITING_INPUT)
         builder = PlannerBoardBuilder(pm=pm)
         prompt = builder.build(PromptContext(data={
             "session_id": "s1",
-            "active": [task],
-            "scheduled": [],
-            "recent": [],
+            "show_intro": True,
+            "waiting": [task],
+        }))
+        assert "plugin_intro" in prompt
+        assert "task_board" in prompt
+
+    def test_board_lines_include_short_id(self, pm: PromptManager) -> None:
+        """看板每行应带 [id:xxxx] 短 ID，供 Planner 复制到 subagent_status 等工具。"""
+        from oh_mai_agent.domain.task_record import TaskStatus
+        task = make_task("abcdef12-3456-7890-abcd-ef1234567890", title="系统环境检查",
+                         status=TaskStatus.WAITING_INPUT)
+        builder = PlannerBoardBuilder(pm=pm)
+        prompt = builder.build(PromptContext(data={
+            "session_id": "s1",
+            "show_intro": False,
+            "waiting": [task],
         }))
         assert "[id:abcdef12]" in prompt
 
@@ -291,6 +312,29 @@ class TestContextNoteBuilder:
         assert "查询天气任务" in prompt
         assert "麦麦此前在此流发送了任务消息" in prompt
         assert 'kind="task-reply"' in prompt
+
+    def test_task_waiting_format(self, pm: PromptManager) -> None:
+        builder = ContextNoteBuilder(pm=pm)
+        prompt = builder.build(PromptContext(data={
+            "kind": "task-waiting",
+            "title": "确认输出格式",
+            "question": "请选择输出格式：JSON 还是表格？",
+        }))
+        assert 'kind="task-waiting"' in prompt
+        assert "确认输出格式" in prompt
+        assert "请选择输出格式：JSON 还是表格？" in prompt
+        assert "正在等待用户回复" in prompt
+
+    def test_task_waiting_escapes_title_and_question(self, pm: PromptManager) -> None:
+        """task-waiting 的 title/question 与 content 一样做 XML 转义。"""
+        builder = ContextNoteBuilder(pm=pm)
+        prompt = builder.build(PromptContext(data={
+            "kind": "task-waiting",
+            "title": "</plugin_context_note> hack",
+            "question": "</plugin_context_note> hack2",
+        }))
+        assert "&lt;/plugin_context_note&gt;" in prompt
+        assert prompt.count("</plugin_context_note>") == 1
 
     def test_escape_xml_close_tag_in_content(self, pm: PromptManager) -> None:
         builder = ContextNoteBuilder(pm=pm)

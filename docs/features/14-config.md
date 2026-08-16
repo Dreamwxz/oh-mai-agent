@@ -84,12 +84,10 @@
 
 | 字段 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| `enabled` | `bool` | `true` | 是否向 Planner 注入任务摘要 |
-| `max_active` | `int` | `5` | 活跃任务（running / waiting_input / paused）条数上限 |
-| `max_scheduled` | `int` | `3` | 即将触发的定时任务条数上限 |
-| `max_recent` | `int` | `3` | 最近完成任务条数上限 |
+| `enabled` | `bool` | `true` | 是否向 Planner 注入插件简介与待办看板 |
+| `max_waiting` | `int` | `5` | 待用户回复任务条数上限（等待最久的优先展示） |
 
-每类任务条数超过上限时按优先级截断。详见 [Planner 看板](./09-planner-board.md)。
+看板只推送「需要 Planner 主动介入」的待办（waiting_input），不再注入运行中/定时/已完成等状态快照；每会话首次请求还会注入一次插件能力简介。详见 [Planner 看板](./09-planner-board.md)。
 
 #### `[polish]` — 润色
 
