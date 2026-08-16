@@ -385,24 +385,7 @@ class MCPConfig(PluginConfigBase):
         json_schema_extra={
             "label": "自定义服务器",
             "hint": "自定义 MCP 服务器列表（在内置 fetch / exa 之外追加）",
-            "order": 4,
-        },
-    )
-
-
-class ApiExposeConfig(PluginConfigBase):
-    """API 暴露等级配置。"""
-
-    __ui_label__ = "API暴露"
-    __ui_order__ = 8
-
-    max_level: Literal["guest", "user", "admin"] = Field(
-        default="user",
-        description="本插件 API 最大暴露等级（当前实现未读取该配置，6 个端点均 public=True，见 api_expose.py）",
-        json_schema_extra={
-            "label": "最大暴露等级",
-            "hint": "本插件 API 最大暴露等级（当前实现未读取该配置，6 个端点均 public=True，见 api_expose.py）",
-            "order": 0,
+            "order": 5,
         },
     )
 
@@ -543,10 +526,6 @@ class MaibotAgentConfig(PluginConfigBase):
     mcp: MCPConfig = Field(
         default_factory=MCPConfig,
         description="MCP 协议配置",
-    )
-    api_expose: ApiExposeConfig = Field(
-        default_factory=ApiExposeConfig,
-        description="API 暴露等级配置",
     )
     search: SearchConfig = Field(
         default_factory=SearchConfig,

@@ -43,7 +43,6 @@ oh-mai-agent（插件 ID `oh-mai-agent`）把 MaiBot 主流程中不适合实时
 | SplitterConfig | 长回复分割（单条长度 / 最多条数） |
 | SendConfig | 发送重试次数与退避 |
 | MCPServerConfig / MCPConfig | MCP 服务器清单与连接配置 |
-| ApiExposeConfig | 跨插件 API 暴露开关 |
 | SearchConfig | 用户搜索 |
 | SubAgentConfig | 子 Agent 执行参数 |
 | ShellConfig | Shell 命令执行参数 |

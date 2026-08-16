@@ -31,7 +31,6 @@ _pkg.__path__ = [str(_PLUGIN_ROOT)]
 sys.modules["oh_mai_agent"] = _pkg
 
 from oh_mai_agent.config import (
-    ApiExposeConfig,
     MaibotAgentConfig,
     MCPConfig,
     PermissionConfig,

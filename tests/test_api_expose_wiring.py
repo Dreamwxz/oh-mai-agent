@@ -9,7 +9,7 @@ import pytest
 import pytest_asyncio
 from conftest import MockCtx, make_task
 
-from oh_mai_agent.config import ApiExposeConfig, MaibotAgentConfig, PermissionConfig, PlannerBoardConfig, TaskConfig
+from oh_mai_agent.config import MaibotAgentConfig, PermissionConfig, PlannerBoardConfig, TaskConfig
 from oh_mai_agent.permission import PermissionResolver
 from oh_mai_agent.plugin import MaibotAgentPlugin
 from oh_mai_agent.domain.task_store import TaskStore
@@ -62,11 +62,10 @@ class TestOnLoadRegistersDynamicApis:
 
         # 模拟 on_load 的接线逻辑（与 on_load 中 setup 之后的部分一致）
         from oh_mai_agent.api_expose import build_api_handlers
-        from oh_mai_agent.config import MaibotAgentConfig, PlannerBoardConfig, ApiExposeConfig, TaskConfig, PermissionConfig
+        from oh_mai_agent.config import MaibotAgentConfig, PlannerBoardConfig, TaskConfig, PermissionConfig
 
         cfg = MaibotAgentConfig(
             planner_board=PlannerBoardConfig(),
-            api_expose=ApiExposeConfig(),
             task=TaskConfig(),
             permission=PermissionConfig(),
         )
@@ -95,11 +94,10 @@ class TestOnLoadRegistersDynamicApis:
     ) -> None:
         """给定 build_api_handlers，全部 6 个 handler 均应标记为 public=True。"""
         from oh_mai_agent.api_expose import build_api_handlers
-        from oh_mai_agent.config import MaibotAgentConfig, PlannerBoardConfig, ApiExposeConfig, TaskConfig, PermissionConfig
+        from oh_mai_agent.config import MaibotAgentConfig, PlannerBoardConfig, TaskConfig, PermissionConfig
 
         cfg = MaibotAgentConfig(
             planner_board=PlannerBoardConfig(),
-            api_expose=ApiExposeConfig(),
             task=TaskConfig(),
             permission=PermissionConfig(),
         )
@@ -116,10 +114,9 @@ class TestApiCreateReplyStreamId:
     @staticmethod
     def _create_handler(plugin: MaibotAgentPlugin) -> Any:
         from oh_mai_agent.api_expose import build_api_handlers
-        from oh_mai_agent.config import ApiExposeConfig, MaibotAgentConfig, PermissionConfig, PlannerBoardConfig, TaskConfig
+        from oh_mai_agent.config import MaibotAgentConfig, PermissionConfig, PlannerBoardConfig, TaskConfig
         cfg = MaibotAgentConfig(
             planner_board=PlannerBoardConfig(),
-            api_expose=ApiExposeConfig(),
             task=TaskConfig(),
             permission=PermissionConfig(),
         )

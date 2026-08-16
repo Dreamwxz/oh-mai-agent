@@ -21,7 +21,7 @@ MaiBot 的插件生态里，插件之间需要协作。oh-mai-agent 掌握着完
 
 参数处理是防御性的：所有关键参数经 `str()` 强制转字符串，数值参数经 `_to_int(val, default)` 安全转换，缺失时落到默认值（如 `limit` 默认 50）；每个 handler 外层都有 `try/except Exception` 兜底，任意异常转为 `{"success": False, "error": str(exc)}`，不让异常穿透到 SDK 调用方。
 
-一个关键设计决策是 `_caller_role = Role.ADMIN`（`api_expose.py:124`）。所有 handler 都以 ADMIN 身份调用 TaskManager，因为跨插件调用被视为受信任的内部通信，不应被面向用户的 owner 权限检查阻拦。这个决策的代价是权限门控责任完全推给了外部调用方，而外部门控函数并未接入，详见已知限制。6 个端点描述符的 `"public"` 字段全部硬编码为 `True`（`api_expose.py:378/385/392/399/406/413`），意味着所有端点对 SDK 注册层无门槛可见。
+一个关键设计决策是 `_caller_role = Role.ADMIN`（api_expose.py 的 `_CALLER_ROLE`）。所有 handler 都以 ADMIN 身份调用 TaskManager，因为跨插件调用被视为受信任的内部通信，不应被面向用户的 owner 权限检查阻拦——MaiBot 的插件均为部署者手动安装的代码，插件间互信是架构前提。6 个端点描述符的 `"public"` 字段全部为 `True`，对所有插件无门槛可见（Host 侧 `_is_api_visible_to_plugin` 仅凭 `entry.plugin_id == caller_plugin_id or entry.public` 判定）。这个信任模型沿 Agent 侧 `call_{api}` 工具链继承后产生一个已知边界，详见「已知限制」。
 
 ### 组装位置：lifecycle.py 第 10 步
 
@@ -84,16 +84,17 @@ ctx.api.call("create", intent="整理聊天记录", owner="qq:1",
 
 ### 配置
 
-`[api_expose]` 配置节（`config.py:323-330`）声明了 `max_level` 字段，默认 `"user"`，设计意图是低于此等级的调用方角色不可访问 API。**当前实现未读取该配置**，详见已知限制。
+跨插件 API 不再有配置节。历史 `[api_expose]` 配置节（含 `max_level` 字段，默认 `"user"`）声明了「API 最大暴露等级」，但跨插件调用不携带调用方角色、Host 侧 `public` 也只是二元可见性开关，等级过滤无法实现，该配置节已从 `config.py` 整体废弃。存量 `config.toml` 中的 `[api_expose]` 节会被静默忽略（`PluginConfigBase` 配置模型 `extra="ignore"`），无需迁移。
 
 ### 已知限制
 
-跨插件 API 体系的权限门控是未完成部分，以下限制经代码验证，详见 [04-permission.md](./04-permission.md)：
+以下限制经代码验证，详见 [04-permission.md](./04-permission.md)：
 
-- **`max_level` 声明但未强制执行**：`build_api_handlers()` 接收 `config` 参数但从不读取 `config.api_expose.max_level`，6 个端点无论配置何值都以 `public=True` 注册。
-- **handler 硬编码 ADMIN 绕过权限检查**：所有 handler 以 `Role.ADMIN` 调用 TaskManager，owner 权限检查被旁路。这是有意设计（跨插件调用视为受信任内部通信），但门控责任完全落在未接入的外部门控上。
+- **`max_level` 已废弃移除**：历史配置字段声明但未强制执行（`build_api_handlers` 也不接收 config 参数），6 个端点始终 `public=True`。因 SDK 模型无法表达「调用方等级」，字段已删除，不再有「配置形同虚设」的问题。
+- **handler 硬编码 ADMIN 执行（有意设计）**：所有 handler 以 `Role.ADMIN` 调用 TaskManager，owner 权限检查被旁路。这是跨插件调用「受信任内部通信」的设计决策，门控责任在部署侧（只安装可信插件）。
+- **call_* 工具继承 ADMIN 执行（已知边界）**：`refresh_plugin_api_tools` 把本插件 6 个端点也包装成 `call_{api}` 工具（min_role=USER），user 级 Agent 经 `call_list`（空 owner）可见全部任务、经 `call_cancel` / `call_pause` / `call_inject` 可控制任意任务——owner 隔离被端点内部的 ADMIN 执行绕过。原生 Agent 工具（tools/agent/task_mgmt.py）是 owner 隔离的，两条路径行为不一致。收紧方向：在 `refresh_plugin_api_tools` 的包装过程中排除本插件自身的敏感端点（create / cancel / pause / inject），使 Agent 只能经原生工具按 owner 隔离操作任务。
 
-整体影响：用户经聊天命令、Agent 经工具调用这两条路径都有完整的角色解析与校验，唯独其他插件经 `ctx.api.call()` 的路径无角色门控，端点 `public=True` 无门槛暴露，handler 以 ADMIN 执行。这是跨插件 API 体系当前最突出的安全缺口。
+整体影响：用户经聊天命令、Agent 经原生工具这两条路径都有完整的角色解析与 owner 校验；跨插件调用（受信任插件）与 call_* 工具（user 级 Agent）两条路径以 ADMIN 执行，前者是设计使然，后者是当前最值得注意的边界。
 
 ### 与工具系统的关系
 

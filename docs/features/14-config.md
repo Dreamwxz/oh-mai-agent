@@ -14,13 +14,13 @@
 
 ### Pydantic 数据模型
 
-配置模型全部定义在 `config.py`，共 14 个 Pydantic 类，分三层：
+配置模型全部定义在 `config.py`，共 13 个 Pydantic 类，分三层：
 
-- **12 个配置节类**，对应 `config.toml` 的 12 个节：`PluginSection`（config.py:32）、`PermissionConfig`（:56）、`TaskConfig`（:109）、`PlannerBoardConfig`（:153）、`PolishConfig`（:184）、`SplitterConfig`（:201）、`SendConfig`（:238）、`MCPConfig`（:324）、`ApiExposeConfig`（:380）、`SearchConfig`（:397）、`SubAgentConfig`（:414）、`ShellConfig`（:460）。
+- **11 个配置节类**，对应 `config.toml` 的 11 个节：`PluginSection`（config.py:32）、`PermissionConfig`（:56）、`TaskConfig`（:109）、`PlannerBoardConfig`（:153）、`PolishConfig`（:184）、`SplitterConfig`（:201）、`SendConfig`（:238）、`MCPConfig`（:324）、`SearchConfig`（:393）、`SubAgentConfig`（:410）、`ShellConfig`（:456）。
 - **1 个嵌套模型** `MCPServerConfig`（config.py:256），描述单个 MCP 服务器，作为 `MCPConfig.servers` 列表的元素。
-- **1 个根模型** `MaibotAgentConfig`（config.py:497），聚合上述 12 节，是插件对外声明的完整配置。
+- **1 个根模型** `MaibotAgentConfig`（config.py:493），聚合上述 11 节，是插件对外声明的完整配置。
 
-每个类继承 `maibot_sdk.PluginConfigBase`。字段用 `Field(default=..., description=...)` 声明默认值和中文描述，`json_schema_extra` 提供 WebUI 表单的中文 `label` / `hint`（无 label 时 WebUI 回退显示英文字段名），`__ui_label__` 提供 WebUI 表单的分组名。`Literal[...]` 类型（如 `transport`、`max_level`）会让 WebUI 渲染成下拉框。
+每个类继承 `maibot_sdk.PluginConfigBase`。字段用 `Field(default=..., description=...)` 声明默认值和中文描述，`json_schema_extra` 提供 WebUI 表单的中文 `label` / `hint`（无 label 时 WebUI 回退显示英文字段名），`__ui_label__` 提供 WebUI 表单的分组名。`Literal[...]` 类型（如 `transport`）会让 WebUI 渲染成下拉框。
 
 ### config.toml 生成与校验
 
@@ -141,12 +141,6 @@
 
 MCP 工具进入 Agent 工具集的 Discoverable 层，按权限过滤。不支持运行时动态增删服务器。详见 [MCP 工具集成](./08-mcp.md)。
 
-#### `[api_expose]` — API 暴露
-
-| 字段 | 类型 | 默认值 | 说明 |
-|---|---|---|---|
-| `max_level` | `Literal["guest", "user", "admin"]` | `"user"` | 本插件 API 最大暴露等级，已声明但当前未执行 |
-
 #### `[search]` — 搜索
 
 | 字段 | 类型 | 默认值 | 说明 |
@@ -177,4 +171,4 @@ MCP 工具进入 Agent 工具集的 Discoverable 层，按权限过滤。不支�
 ### 已知限制
 
 - **`default_timeout_min` 已配置但未执行**（config.py:133）。`TaskConfig.default_timeout_min` 声明了 `ask_user` 无回复挂起等待时间的意图，但调度器未读取该值：`waiting_input` 状态的任务不因超时而自动取消或推进，而是永久挂起直到用户回复或手动取消。
-- **`api_expose.max_level` 声明未执行**（config.py:386）。`ApiExposeConfig.max_level` 声明了暴露等级约束，但 `api_expose.py` 的 `build_api_handlers()` 未读取该值做调用方过滤，6 个端点全部 `public=True`。用户将 `max_level` 设为 `"admin"` 不会改变实际行为。
+- **跨插件 API 无角色门控（信任模型设计）**。6 个跨插件端点全部 `public=True`、handler 内部以 ADMIN 执行，owner 校验被有意旁路——跨插件调用面向受信任插件。历史 `[api_expose].max_level` 配置因 SDK 无法表达「调用方等级」已废弃移除。详见 [04-permission](./04-permission.md) 与 [10-cross-plugin-api](./10-cross-plugin-api.md)。

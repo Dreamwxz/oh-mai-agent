@@ -3,12 +3,15 @@
 暴露任务管理 API（创建/列表/获取/取消/注入/历史），
 供其它 MaiBot 插件通过 ``ctx.api.call()`` 调用。
 
-设计意图：API 默认暴露等级为 user+，config.api_expose.max_level
-用于声明最大暴露等级。
+信任模型：跨插件 API 面向**受信任插件**——MaiBot 的插件均为部署者手动安装的
+代码，插件间互信是架构前提，故所有 handler 统一以 ``_CALLER_ROLE = Role.ADMIN``
+调用 TaskManager，不做面向用户的 owner 权限校验（config 不再声明任何暴露等级
+配置，历史 ``max_level`` 字段已废弃，见 docs/features/04-permission.md）。
 
-当前实现（与设计意图有差距）：
-  - build_api_handlers() 不读取 config.api_expose.max_level，
-    全部 6 个端点均以 public=True 注册，无等级过滤。
+已知边界：经 ``ctx.api.list()`` 包装出的 Agent 侧 ``call_*`` 工具
+（min_role=USER）同样可触达这些端点并以 ADMIN 执行——user 级 Agent 可列出
+全部任务并取消/暂停/注入任意任务，owner 隔离被绕过。这是信任模型继承的
+结果，详见 docs/features/04-permission.md 与 10-cross-plugin-api.md。
 """
 
 from __future__ import annotations

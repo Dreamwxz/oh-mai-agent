@@ -70,7 +70,7 @@ agent_system / title / polish / planner_board / injection / context_note / subag
 
 **目录结构**（散文式，不用多级缩进树）：
 
-- 根目录单文件模块：`plugin.py`（入口，注册 11 个 @Tool / 7 @Command）、`config.py`（12 节配置）、
+- 根目录单文件模块：`plugin.py`（入口，注册 11 个 @Tool / 7 @Command）、`config.py`（11 节配置）、
   `permission.py`、`api_expose.py`、`planner_hooks.py`、`commands.py`、`lifecycle.py`
   （唯一组装点，load_plugin 编排全部依赖）、`_manifest.json`
 - `bus/`：命令总线，消息类型（`bus/messages.py` 纯 dataclass）+ TaskCommandBus 命令路由
@@ -160,7 +160,7 @@ refactor(domain): remove planner task level and legacy level map
 
 | 位置 | 问题 | 详见 |
 |---|---|---|
-| `api_expose.py` | `max_level` 声明但未执行，6 个端点全部 public=true | [04-permission](docs/features/04-permission.md) |
+| `tools/agent/plugin_api_tools.py` | call_* 工具（min_role=USER）可触达本插件 6 个跨插件端点并以 ADMIN 执行，owner 隔离被绕过（user 级 Agent 可列全部任务、取消/暂停/注入任意任务）；跨插件 API 面向受信任插件，历史 `max_level` 配置已废弃 | [04-permission](docs/features/04-permission.md) |
 | `domain/task_record.py` | 无 schema 版本管理，数据模型升级无法自动迁移 | [01-task-model](docs/features/01-task-model.md) |
 | `plugin.py` | 对外 @Tool 名 `subagent_delete` 与 @Command 名 `task_cancel` 不一致 | [01-task-model](docs/features/01-task-model.md) |
 | `config.py [task]` | `default_timeout_min` 已配置但实际未执行 | [14-config](docs/features/14-config.md) |

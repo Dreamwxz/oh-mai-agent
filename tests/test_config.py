@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 
 from oh_mai_agent.config import (
-    ApiExposeConfig,
     MaibotAgentConfig,
     MCPConfig,
     MCPServerConfig,
@@ -129,20 +128,6 @@ class TestMCPConfig:
         assert cfg.servers[0].name == "srv"
 
 
-class TestApiExposeConfig:
-    def test_defaults(self) -> None:
-        cfg = ApiExposeConfig()
-        assert cfg.max_level == "user"
-
-    def test_admin_level(self) -> None:
-        cfg = ApiExposeConfig(max_level="admin")
-        assert cfg.max_level == "admin"
-
-    def test_guest_level(self) -> None:
-        cfg = ApiExposeConfig(max_level="guest")
-        assert cfg.max_level == "guest"
-
-
 class TestMaibotAgentConfig:
     def test_defaults(self) -> None:
         cfg = MaibotAgentConfig()
@@ -151,7 +136,6 @@ class TestMaibotAgentConfig:
         assert isinstance(cfg.planner_board, PlannerBoardConfig)
         assert isinstance(cfg.polish, PolishConfig)
         assert isinstance(cfg.mcp, MCPConfig)
-        assert isinstance(cfg.api_expose, ApiExposeConfig)
 
     def test_nested_config_defaults(self) -> None:
         cfg = MaibotAgentConfig()
@@ -160,7 +144,6 @@ class TestMaibotAgentConfig:
         assert cfg.planner_board.enabled is True
         assert cfg.polish.use_jargon is True
         assert cfg.mcp.enabled is True
-        assert cfg.api_expose.max_level == "user"
 
     def test_custom_nested_config(self) -> None:
         cfg = MaibotAgentConfig(
