@@ -112,11 +112,14 @@ class TaskCrud:
             # 但调用方不应依赖这一兜底。
             logger.error("任务 %s 已保存但入队失败，任务将不会执行", task.id)
             return False, "任务创建失败：调度器入队异常（已保存，详见日志）"
+        # bf280ed 后 _try_dispatch 用重读快照启动任务，本函数持有的 task
+        # 引用可能停在 PENDING；返回前重读，避免创建回复误显"排队中"
+        fresh = await self._store.get(task.id)
         logger.info(
             "任务 %s 创建成功：title=%s level=%s owner=%s trigger=%s",
             task.id, task.title, task.level.value, task.owner, task.trigger_type.value,
         )
-        return True, task
+        return True, fresh or task
 
     async def list_tasks(
         self,
