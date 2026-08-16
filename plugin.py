@@ -406,7 +406,7 @@ class MaibotAgentPlugin(MaiBotPlugin):
 
     @Tool(
         "call_mcp_tool",
-        description="调用 MCP 服务器的工具（如抓取网页、查询外部数据）。先用 list_mcp_tools 查看可用的服务器和工具列表；arguments 是 JSON 字符串或对象，参数结构由具体工具决定。",
+        description="调用 MCP 服务器的工具（如抓取网页、查询外部数据）。所有 MCP 工具统一经本工具调用：先用 list_mcp_tools 查看可用的服务器和工具列表，再按 server（服务器名）、tool（工具名）、arguments（JSON 字符串或对象，参数结构由具体工具决定）三个参数发起调用。",
         visibility="deferred",
         parameters=[
             ToolParameterInfo(
