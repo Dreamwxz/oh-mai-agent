@@ -11,6 +11,9 @@ dependencies = [
     "croniter>=2.0.0",
     "jinja2>=3.1",
     "mcp-server-fetch>=2025.4.7",
+    # 与 _manifest.json 对齐：mcp 是 mcp-server-fetch 的传递依赖（其声明无上界），
+    # 本插件直接 pin <2.0.0 以锁住 stdio 帧协议（发送侧固定 newline 帧，适配 MCP SDK <2.0）。
+    "mcp>=1.1.3,<2.0.0",
 ]
 
 [tool.setuptools.packages.find]

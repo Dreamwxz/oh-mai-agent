@@ -120,6 +120,7 @@
 | `enabled` | `bool` | `true` | 是否启用 MCP 工具 |
 | `fetch_enabled` | `bool` | `true` | 是否启用内置 fetch MCP 服务器 |
 | `fetch_user_agent` | `str` | 浏览器 UA（Chrome/126 Windows） | 内置 fetch 出站请求的 User-Agent；默认浏览器 UA 规避反爬验证码，留空退回 mcp-server-fetch 自带 UA |
+| `fetch_block_internal` | `bool` | `true` | 是否拦截内置 fetch 抓取内网/云元数据地址（SSRF 缓解，默认开启）：拦截回环、私有网段、链路本地（含 169.254.169.254）、CGNAT 等地址，域名先解析再逐 IP 判定；内网文档抓取场景需设为 `false` |
 | `exa_enabled` | `bool` | `true` | 是否启用内置 exa.ai MCP 服务器 |
 | `servers` | `list[MCPServerConfig]` | `[]`（自定义追加；内置 exa/fetch 预设见 08-mcp.md） | MCP 服务器列表 |
 

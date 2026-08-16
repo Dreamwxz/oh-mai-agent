@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import logging
+import sys
 from typing import Any
 
 from ...config import MCPConfig, MCPServerConfig
@@ -22,6 +23,7 @@ from ...permission import Role
 from ..registry import ToolDefinition, ToolRegistry
 
 from .connection import MCPConnection
+from .fetch_guard import validate_fetch_url
 from .presets import resolve_effective_servers
 
 logger = logging.getLogger(__name__)
@@ -72,6 +74,19 @@ def unregister_stale_mcp_tools(registry: ToolRegistry, new_tool_names: set[str])
             registry.unregister(name)
 
 
+def _is_builtin_fetch_server(server_cfg: MCPServerConfig) -> bool:
+    """判定服务器是否为内置 fetch 预设（签名匹配：stdio + 当前解释器 + ``-m mcp_server_fetch``）。
+
+    用户自定义服务器若以同样签名启动 mcp-server-fetch，具有相同的 SSRF 风险面，
+    同样纳入 fetch URL 安全校验范围；其他自定义服务器不受校验约束。
+    """
+    return (
+        server_cfg.transport == "stdio"
+        and server_cfg.command == sys.executable
+        and list(server_cfg.args or []) == ["-m", "mcp_server_fetch"]
+    )
+
+
 class MCPManager:
     """管理多个 MCP 服务器连接并暴露工具。
 
@@ -109,6 +124,9 @@ class MCPManager:
         self._per_server_timeout_s = per_server_timeout_s
         self._connections: dict[str, MCPConnection] = {}
         self._tools: list[dict[str, Any]] = []
+        #: 内置 fetch 预设的服务器名集合（_start_all 按签名识别后填充），
+        #: call_tool 对其 fetch 工具做 URL 安全校验（见 tools/mcp/fetch_guard.py）。
+        self._guarded_fetch_servers: set[str] = set()
 
     # ── 生命周期 ──────────────────────────────────────────────────────────
 
@@ -149,6 +167,9 @@ class MCPManager:
             if not server_cfg.name:
                 logger.warning("MCP 服务器配置缺少名称，已跳过")
                 continue
+
+            if _is_builtin_fetch_server(server_cfg):
+                self._guarded_fetch_servers.add(server_cfg.name)
 
             if server_cfg.transport == "stdio" and not _stdio_module_available(server_cfg):
                 continue
@@ -268,6 +289,21 @@ class MCPManager:
         conn = self._connections.get(server)
         if conn is None:
             return {"success": False, "error": f"MCP server not connected: {server}"}
+
+        # 内置 fetch 的 URL 安全校验（SSRF 缓解）：默认拦截内网/链路本地/云元数据
+        # 地址；[mcp] fetch_block_internal=false 时整体关闭（部署者显式放行内网抓取）。
+        if (
+            server in self._guarded_fetch_servers
+            and name == "fetch"
+            and self._config.fetch_block_internal
+            and isinstance(arguments, dict)
+            and isinstance(arguments.get("url"), str)
+            and arguments["url"].strip()
+        ):
+            err = await validate_fetch_url(arguments["url"].strip())
+            if err is not None:
+                logger.warning("内置 fetch 工具 URL 被安全策略拦截：%s", err)
+                return {"success": False, "error": err}
 
         result = await conn.call_tool(name, arguments)
         # 如果连接层已经返回了错误 dict，直接透传。

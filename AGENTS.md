@@ -80,7 +80,7 @@ agent_system / title / polish / planner_board / injection / context_note / subag
 - `domain/`：领域模型与持久化，TaskRecord 状态机 + TaskStore + Recovery + StatusFormatter
   + 流/owner 身份值对象（stream_ref.py，`:group:` / `planner:` 语义唯一出处）
 - `executor/`：执行层——AgentLoop 执行引擎（agent_loop.py）+ current_task 执行上下文（context.py）+ 发送基础设施（sender.py，ReplySender / PolishService / fail_task，全插件共用）+ ExecutorFactory 按级分发 InstantExecutor（进程内）/ AgentExecutor + 工具装配（tool_registrar.py，TaskManager.setup() 委托其注册全部 Agent 工具）
-- `tools/mcp/`：MCP 工具提供方，MCPConnection（stdio/http/sse）+ MCPManager + presets（内置 fetch/exa 预设）
+- `tools/mcp/`：MCP 工具提供方，MCPConnection（stdio/http/sse）+ MCPManager + presets（内置 fetch/exa 预设）+ fetch_guard（内置 fetch 出站 URL 内网/元数据地址拦截，SSRF 缓解）
 - `prompt/`：提示词系统，manager / service / base + builders/（7）+ templates/（7 中文模板）
 - `tools/`：工具系统三通道（agent 循环工具（含子 Agent 工具 `subagent_tool.py`）/ planner @Tool 工厂 / synthetic 发现工具）+ 发送工具共用实现 `tools/send_message.py` + MCP 工具提供方（tools/mcp/）
 - `tests/`：测试（58 文件，999+ 测试函数，0 失败）+ 文档引用检查（test_doc_links.py）
@@ -165,5 +165,5 @@ refactor(domain): remove planner task level and legacy level map
 | `plugin.py` | 对外 @Tool 名 `subagent_delete` 与 @Command 名 `task_cancel` 不一致 | [01-task-model](docs/features/01-task-model.md) |
 | `config.py [task]` | `default_timeout_min` 已配置但实际未执行 | [14-config](docs/features/14-config.md) |
 | `config.py [task]` | `persist_history` 已配置但实际未执行（任务历史始终持久化） | [03-persistence-recovery](docs/features/03-persistence-recovery.md) |
-| `tools/mcp/connection.py` | stdio 发送侧固定 newline 帧（适配 MCP SDK <2.0；读取侧双格式兼容）；若宿主切换 mcp SDK 2.0 需适配发送侧，manifest 已 pin `mcp>=1.1.3,<2.0.0` | [08-mcp](docs/features/08-mcp.md) |
+| `tools/mcp/connection.py` | stdio 发送侧固定 newline 帧（适配 MCP SDK <2.0；读取侧双格式兼容）；若宿主切换 mcp SDK 2.0 需适配发送侧，manifest 与 pyproject.toml 均已 pin `mcp>=1.1.3,<2.0.0` | [08-mcp](docs/features/08-mcp.md) |
 | 代码注释 12 处 | 裸 § 节号引用残留（plugin.py / domain / tools 等文件） | 已知遗留，不修复 |

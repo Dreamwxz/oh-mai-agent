@@ -128,6 +128,29 @@ http/sse 需要网络可达目标 URL。
   合规检查（`mcp-server-fetch` 的 `check_may_autonomously_fetch_url`），B 站等站点
   robots.txt 按 `User-agent: *` 通配判定，不因换 UA 新增拦截。
 
+**出站安全校验（SSRF 缓解）**：`mcp-server-fetch` 自身只做 robots.txt 合规检查，
+没有任何地址过滤（`fetch_url` 直接用 httpx GET，`follow_redirects=True`）。Agent 的
+上下文可能被不可信内容污染（提示词注入），被诱导抓取 `http://169.254.169.254/`
+（云元数据）、`http://localhost:*`（本机管理口）或内网服务。插件层因此对内置
+fetch 预设加一道前置校验（`tools/mcp/fetch_guard.py` 的 `validate_fetch_url`，
+经 `MCPManager.call_tool` 在到达连接层前执行，Agent 侧 `mcp_fetch_fetch` 与
+Planner 侧 MCP 工具两条路径都覆盖）：
+
+- 仅接受 `http` / `https` scheme；
+- 拦截本机回环（`127.0.0.0/8`、`::1`）、私有网段（`10/8`、`172.16/12`、
+  `192.168/16`、`fc00::/7`）、链路本地（`169.254.0.0/16`，含云元数据
+  `169.254.169.254`）、CGNAT（`100.64/10`，含阿里云元数据 `100.100.100.200`）
+  等地址，`localhost` 及子域直接拒绝；
+- 域名先解析再逐 IP 判定（任一命中即拦截），IPv4 映射地址（`::ffff:x.x.x.x`）
+  解包后按 IPv4 网段判定；
+- 默认开启，由 `[mcp].fetch_block_internal` 控制（`config.py` 的 `MCPConfig`）；
+  内网文档抓取等合法场景需部署者显式设为 `false` 放行。
+
+拦截结果以 `{"success": false, "error": ...}` 返回，LLM 可见并可据此换用其他
+URL。校验按服务器签名识别内置 fetch 预设（stdio + 当前解释器 +
+`-m mcp_server_fetch`），用户以同样签名启动的自定义服务器同样受约束，其他
+自定义 MCP 服务器由部署者自行负责。
+
 生效服务器列表由 `resolve_effective_servers`（`tools/mcp/presets.py`）按开关与去重规则组装：
 exa 启用且用户列表无同名或同 URL 条目时加入，fetch 启用且用户列表无同名条目时加入，用户
 自定义 `servers` 始终追加在后。存量配置若含旧 `websearch` 条目，因其 URL 与 exa 预设相同会
@@ -162,14 +185,19 @@ exa 启用且用户列表无同名或同 URL 条目时加入，fetch 启用且�
   保证精确）。
 - **预设可被同名条目覆盖**：用户 `servers` 列表中与预设同名（`exa` / `fetch`）的条目会替代
   预设连接，需注意配置一致性。
+- **fetch 安全校验尽力而为**：插件层的 URL 校验挡不住 DNS 重绑定（校验与抓取是
+  两次独立解析）与重定向绕过（服务器侧 `follow_redirects=True`，公网 URL 可
+  302 到内网），这两条需代理层或服务器侧加固才能根治；`fetch_block_internal=false`
+  时校验整体关闭，属部署者显式放行内网抓取。
 - **stdio 帧格式曾与 MCP Python SDK <2.0 不匹配（已修复）**：插件自研 stdio 客户端曾按
   LSP 风格 `Content-Length` 帧收发，而 MCP Python SDK 1.x 的 stdio 服务器默认
   newline-delimited JSON（每行一条 JSON-RPC 消息），双方无法完成 initialize 握手，
   内置 fetch 预设因此每次启动超时（5s）被跳过。现已修复：发送侧改用 newline 帧
   （`MCPConnection._send_raw`），读取侧兼容两种格式
-  （`MCPConnection._read_stdio_response`）。`_manifest.json` 的 `dependencies` 显式声明
-  `mcp>=1.1.3,<2.0.0` 固定宿主兼容区间（MaiBot 本体对 `mcp` 无版本约束，此声明不冲突、
-  不阻止加载），防止宿主环境将 `mcp` 升级到 2.x。**MaiBot 本体 MCP 模块
+  （`MCPConnection._read_stdio_response`）。`_manifest.json` 与 `pyproject.toml`
+  的 `dependencies` 均显式声明 `mcp>=1.1.3,<2.0.0` 固定宿主兼容区间
+  （MaiBot 本体对 `mcp` 无版本约束，此声明不冲突、不阻止加载），防止宿主环境将
+  `mcp` 升级到 2.x。**MaiBot 本体 MCP 模块
   （`src.mcp_module`，官方 SDK 客户端）自始不受此问题影响，工作正常**。残余限制：
   发送侧固定 newline 帧，若宿主环境切换到 mcp SDK 2.0（Content-Length 帧服务器），
   发送侧需同步适配。

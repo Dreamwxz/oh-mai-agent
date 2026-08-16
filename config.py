@@ -357,13 +357,26 @@ class MCPConfig(PluginConfigBase):
             "order": 2,
         },
     )
+    fetch_block_internal: bool = Field(
+        default=True,
+        description=(
+            "是否拦截内置 fetch 抓取内网/云元数据地址（默认开启）：拦截本机回环、私有网段、"
+            "链路本地（含云元数据 169.254.169.254）、CGNAT 等地址，域名会先解析再逐 IP 判定；"
+            "内网文档抓取场景需设为 false"
+        ),
+        json_schema_extra={
+            "label": "拦截内网地址",
+            "hint": "拦截内置 fetch 访问本机回环、私有网段、链路本地（含云元数据 169.254.169.254）等地址；内网抓取场景需关闭",
+            "order": 3,
+        },
+    )
     exa_enabled: bool = Field(
         default=True,
         description="是否启用内置 exa.ai MCP 服务器（远程 web 搜索）",
         json_schema_extra={
             "label": "内置 exa.ai",
             "hint": "是否启用内置 exa.ai MCP 服务器（远程 web 搜索）",
-            "order": 3,
+            "order": 4,
         },
     )
     servers: list[MCPServerConfig] = Field(
