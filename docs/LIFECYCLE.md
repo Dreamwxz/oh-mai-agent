@@ -286,7 +286,7 @@ Agent 循环完成 / Instant 任务
 │  ┌──────────────────────────────┐  │
 │  │ ReplySender.send_polished()  │  │  完整出口：信息获取→润色→直发
 │  │  ├─ PolishService.polish()   │  │  仅执行一次，失败回退原文
-│  │  ├─ split_message(分段)      │  │  按行/句切分，≤max_messages 条
+│  │  ├─ split_message(分段)      │  │  两级：按行优先，无换行按句号，≤max_messages 条
 │  │  └─ ctx.send.text(逐段发送)  │  │
 │  │      └─ 失败 → 指数退避重试   │  │  1s → 2s（2^attempt）
 │  │         检测 False/None 掉包  │  │
@@ -311,7 +311,7 @@ Agent 循环完成 / Instant 任务
 
 1. **两条出口**：`send_raw`（直发：分割 + 重试，无润色，用于命令/失败通知等确定性文本）与 `send_polished`（完整：信息获取 → 润色 → 复用直发发送段，用于任务回复/提问/send_message）；发送出口**不做任何上下文写入**
 2. **润色仅执行一次**：`PolishService.polish()` 拉取聊天记录和黑话表经 LLM 润色，失败时自动回退到原始文本
-3. **长回复分割**：`split_message()`（`executor/splitter.py`）按行/句末标点把回复切成多条（≤ `max_messages` 条、每段 ≤ `max_length`），保留原文不丢内容，统一跟随 `[splitter]` 配置
+3. **长回复分割**：`split_message()`（`executor/splitter.py`）两级切分——含换行按行优先（行超长再行内按句号），无换行按句号——把回复切成多条（≤ `max_messages` 条、每段 ≤ `max_length`），保留原文不丢内容，统一跟随 `[splitter]` 配置
 4. **逐段指数退避重试 + 静默掉包检测**：每段 `ctx.send.text()` 失败时重试（`config.send.max_retries` 次，间隔 1s → 2s），返回 `False/None` 视为失败，任一段耗尽即停止后续分段并抛异常
 
 跨流回复（`reply_stream_id` 或 `is_reply_task()`）经 `append_motivation_note()` 补写动机 XML 注释——对用户不可见，写给 MaiBot/Planner 上下文，是插件工作内容进入认知层的关键通道。

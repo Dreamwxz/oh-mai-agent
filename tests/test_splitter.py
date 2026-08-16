@@ -1,7 +1,8 @@
 """executor/splitter.py 的测试 —— 确定性回复分割器。
 
-覆盖：短文本不分割、按行/句切分、引号保护、守卫规则、超长硬切、
-max_messages 尾部合入、原文保真（join(segments) == 归一化原文）。
+覆盖：短文本不分割、两级策略（有换行按行为主 / 无换行按句号）、
+引号保护、守卫规则、超长硬切、max_messages 尾部合入、
+原文保真（join(segments) == 归一化原文）。
 """
 
 from __future__ import annotations
@@ -20,6 +21,20 @@ from oh_mai_agent.executor.splitter import (
 def _normalized(text: str) -> str:
     """与 splitter 内部一致的归一化：连续换行（含中间空白）→ 单个换行。"""
     return re.sub(r"\n\s*\n+", "\n", text)
+
+
+def _is_whole_line_concatenation(segment: str, lines: list[str]) -> bool:
+    """判断 *segment* 是否由若干完整行（无行内截断）拼接而成。"""
+    content = segment[:-1] if segment.endswith("\n") else segment
+    parts = content.split("\n")
+    if parts and parts[-1] == "":
+        parts = parts[:-1]
+    if not parts:
+        return False
+    start = next((i for i, line in enumerate(lines) if line == parts[0]), None)
+    if start is None:
+        return False
+    return lines[start : start + len(parts)] == parts
 
 
 class TestShortText:
@@ -72,6 +87,54 @@ class TestLineSplitting:
         assert "".join(segments) == _normalized(text)
 
 
+class TestTwoTierStrategy:
+    """两级策略：有换行按行分割为主，无换行按句号分割。"""
+
+    def test_short_lines_packed_but_never_broken(self) -> None:
+        # 短行合并打包：段边界只在行边界，任何段都是完整行的拼接
+        lines = [f"行{i}内容" for i in range(30)]
+        text = "\n".join(lines)
+        segments = split_message(text, max_length=50, max_messages=5)
+        assert "".join(segments) == _normalized(text)
+        assert len(segments) > 1
+        for segment in segments:
+            assert _is_whole_line_concatenation(segment, lines)
+
+    def test_oversized_line_split_by_sentence_within_line(self) -> None:
+        # 行超长 → 行内按句号切；短行保持完整，段边界只在行边界/行内句号
+        line = "第一句。第二句。第三句。" * 60  # 720 字
+        text = line + "\n" + "结尾短行。"
+        segments = split_message(text, max_length=100, max_messages=5)
+        assert "".join(segments) == _normalized(text)
+        assert all(len(s) <= 100 for s in segments[:-1])
+        assert segments[-1].endswith("结尾短行。")
+
+    def test_segments_do_not_mix_partial_lines(self) -> None:
+        # 回归：旧实现会把一行从句子中间拆断并跨行混装
+        # （seg 以第一行末尾句子开头、再混入第二行），两级策略后不再发生
+        line = "这是第一段描述内容，包含多个句子。第二个句子在这里。第三个句子也在这里。" * 24  # 864 字
+        text = line + "\n" + "短行结尾。"
+        segments = split_message(text, max_length=500, max_messages=5)
+        assert "".join(segments) == _normalized(text)
+        assert all(len(s) <= 500 for s in segments)
+        # 短行始终完整保留在最后一段
+        assert segments[-1].endswith("短行结尾。")
+
+    def test_no_newline_falls_back_to_sentence_split(self) -> None:
+        # 无换行（单段长文）→ 整段按句号切
+        text = "。".join([f"句子{i}内容" for i in range(50)])
+        segments = split_message(text, max_length=100, max_messages=5)
+        assert "".join(segments) == _normalized(text)
+        assert len(segments) >= 2
+        assert all(len(s) <= 100 for s in segments[:-1])
+
+    def test_trailing_newline_merged_into_previous_unit(self) -> None:
+        # 回归：行尾 \n 归入前一片段，join 保真不丢换行
+        units = _split_into_units("句子一。句子二。\n")
+        assert units == ["句子一。", "句子二。\n"]
+        assert "".join(units) == "句子一。句子二。\n"
+
+
 class TestGuardRules:
     def test_quote_content_not_split(self) -> None:
         text = '他说："你好，世界"，然后离开了。'
@@ -80,7 +143,6 @@ class TestGuardRules:
         assert "".join(units) == _normalized(text)
         for unit in units:
             assert "你好，世界" in unit or "你好" not in unit
-
     def test_colon_guard_no_split_after_colon(self) -> None:
         text = "说明： 这是一个很长的说明内容" + "很" * 100
         assert _can_split_soft(" ", text, text.index("：") + 1) is False
