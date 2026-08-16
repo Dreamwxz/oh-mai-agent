@@ -256,7 +256,7 @@ def build_info_tools(ctx, search_max_results: int = 20) -> list[ToolDefinition]:
     # ── 6.（已移除）list_plugin_tools ───────────────────────────────
     #
     # 该工具曾经 ``ctx.tool.get_definitions()`` 列出 MaiBot 宿主侧全量工具
-    # （含插件 planner 层 @Tool：list_mcp_tools / call_mcp_tool / task_* 等），
+    # （含插件 planner 层 @Tool：list_mcp_tools / call_mcp_tool / subagent_* 等），
     # 而这些名字在 Agent 循环注册表里不可调用，导致 LLM 照单调用后反复
     # tool-not-found 空转。Agent 循环已改为全量直接暴露自身可调工具
     # （executor/agent_loop.py），动态发现入口不再需要，故移除。

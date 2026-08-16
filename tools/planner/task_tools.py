@@ -1,6 +1,6 @@
-"""Planner tool: task_* handler 工厂。
+"""Planner tool: subagent_* handler 工厂。
 
-实现体从 ``plugin.py`` 的 7 个 ``_tool_task_*`` @Tool handler 中抽离；
+实现体从 ``plugin.py`` 的 7 个 ``_tool_subagent_*`` @Tool handler 中抽离；
 plugin.py 现仅保留 @Tool 声明并委托本模块的 handler（见其 ``_get_planner_tool``）。
 同时定义 ``_planner_owner`` / ``_planner_caller_role`` 两个辅助函数。
 """
@@ -28,11 +28,39 @@ def _planner_caller_role() -> Role:
     return Role.ADMIN
 
 
-def build_task_tools(task_manager: Any) -> dict[str, Callable[..., Any]]:
-    """返回 7 个 task_* handler 字典。
+def _current_stream_error(kwargs: dict[str, Any]) -> str | None:
+    """校验任务工具的 stream_id 必须属于当前会话流。
 
-    键名：task_create / task_list / task_status / task_modify / task_delete /
-          task_history / task_schedule。
+    利用宿主注入指纹 ``chat_id``（MaiBot Host 专用字段，schema 无此参数、
+    LLM 永不传；宿主注入的 stream_id 恒等于 chat_id，见 send_message
+    同款指纹剥离）：LLM 传入的 stream_id 与当前会话不一致时返回错误文案，
+    拒绝跨流访问其他会话的 planner 任务。
+
+    兼容性：chat_id 缺失（无宿主注入环境，如测试直接调用）时放行，
+    不误伤正常调用。
+
+    Args:
+        kwargs: 工具调用参数（含宿主注入的 chat_id）。
+
+    Returns:
+        不一致时的错误文案；一致或无法判定时返回 None。
+    """
+    chat_id = str(kwargs.get("chat_id", "")).strip()
+    stream_id = str(kwargs.get("stream_id", "")).strip()
+    if chat_id and stream_id and stream_id != chat_id:
+        return (
+            f"任务工具只能操作当前会话的任务：stream_id({stream_id}) "
+            f"与当前会话({chat_id})不一致，请使用当前会话的 stream_id"
+        )
+    return None
+
+
+def build_task_tools(task_manager: Any) -> dict[str, Callable[..., Any]]:
+    """返回 7 个 subagent_* handler 字典。
+
+    键名：subagent_create / subagent_list / subagent_status /
+          subagent_modify / subagent_delete / subagent_history /
+          subagent_schedule。
     """
 
     # ── task_create ────────────────────────────────────────────────────────
@@ -53,6 +81,11 @@ def build_task_tools(task_manager: Any) -> dict[str, Callable[..., Any]]:
                 "Planner 调用 task_create：stream_id=%s, level=%r, delay=%r, cron=%r, intent=%.80r",
                 stream_id, level_str, delay_seconds, cron_expr, intent,
             )
+
+            # 流隔离：任务归属必须为当前会话流（宿主注入 chat_id 指纹校验）
+            stream_error = _current_stream_error(kwargs)
+            if stream_error:
+                return {"success": False, "error": stream_error}
 
             # 解析 level
             level: TaskLevel | None = None
@@ -117,6 +150,11 @@ def build_task_tools(task_manager: Any) -> dict[str, Callable[..., Any]]:
 
             logger.debug("Planner 调用 task_list：stream_id=%s, status=%r", stream_id, status_str)
 
+            # 流隔离：只能列出当前会话的任务
+            stream_error = _current_stream_error(kwargs)
+            if stream_error:
+                return {"success": False, "error": stream_error}
+
             tasks = await task_manager.list_tasks(
                 caller_role=_planner_caller_role(),
                 owner="",  # ADMIN 且 owner 为空 = 查看全部
@@ -154,6 +192,11 @@ def build_task_tools(task_manager: Any) -> dict[str, Callable[..., Any]]:
 
             logger.debug("Planner 调用 task_status：task_id=%s, stream_id=%s", task_id, stream_id)
 
+            # 流隔离：只能查看当前会话的任务
+            stream_error = _current_stream_error(kwargs)
+            if stream_error:
+                return {"success": False, "error": stream_error}
+
             ok, result = await task_manager.get_task(
                 task_id=task_id,
                 caller_role=_planner_caller_role(),
@@ -185,6 +228,11 @@ def build_task_tools(task_manager: Any) -> dict[str, Callable[..., Any]]:
                 task_id, stream_id, instruction,
             )
 
+            # 流隔离：只能向当前会话的任务注入指令
+            stream_error = _current_stream_error(kwargs)
+            if stream_error:
+                return {"success": False, "error": stream_error}
+
             ok, msg = await task_manager.modify_task(
                 task_id=task_id,
                 caller_role=_planner_caller_role(),
@@ -210,6 +258,11 @@ def build_task_tools(task_manager: Any) -> dict[str, Callable[..., Any]]:
 
             logger.debug("Planner 调用 task_delete：task_id=%s, stream_id=%s", task_id, stream_id)
 
+            # 流隔离：只能取消当前会话的任务
+            stream_error = _current_stream_error(kwargs)
+            if stream_error:
+                return {"success": False, "error": stream_error}
+
             ok, msg = await task_manager.cancel_task(
                 task_id=task_id,
                 caller_role=_planner_caller_role(),
@@ -233,6 +286,11 @@ def build_task_tools(task_manager: Any) -> dict[str, Callable[..., Any]]:
             stream_id = str(kwargs.get("stream_id", ""))
 
             logger.debug("Planner 调用 task_history：task_id=%s, stream_id=%s", task_id, stream_id)
+
+            # 流隔离：只能查看当前会话任务的历史
+            stream_error = _current_stream_error(kwargs)
+            if stream_error:
+                return {"success": False, "error": stream_error}
 
             ok, result = await task_manager.task_history(
                 task_id=task_id,
@@ -263,6 +321,11 @@ def build_task_tools(task_manager: Any) -> dict[str, Callable[..., Any]]:
                 "Planner 调用 task_schedule：stream_id=%s, cron=%r, level=%r, intent=%.80r",
                 stream_id, cron_expr, level_str, intent,
             )
+
+            # 流隔离：定时任务归属必须为当前会话流
+            stream_error = _current_stream_error(kwargs)
+            if stream_error:
+                return {"success": False, "error": stream_error}
 
             if not cron_expr:
                 logger.warning("task_schedule 参数校验失败：缺少必填参数 cron_expr")
@@ -303,11 +366,11 @@ def build_task_tools(task_manager: Any) -> dict[str, Callable[..., Any]]:
             return {"success": False, "error": str(exc)}
 
     return {
-        "task_create": _task_create,
-        "task_list": _task_list,
-        "task_status": _task_status,
-        "task_modify": _task_modify,
-        "task_delete": _task_delete,
-        "task_history": _task_history,
-        "task_schedule": _task_schedule,
+        "subagent_create": _task_create,
+        "subagent_list": _task_list,
+        "subagent_status": _task_status,
+        "subagent_modify": _task_modify,
+        "subagent_delete": _task_delete,
+        "subagent_history": _task_history,
+        "subagent_schedule": _task_schedule,
     }

@@ -82,7 +82,7 @@ cron 任务完成后经 `force()` 重置回 `scheduled` 等待下次触发（`co
 任务创建有三个入口，全部经 TaskManager 门面：
 
 - **`/task create <意图>` 命令**：面向聊天用户，user 及以上角色可用
-- **Planner `task_create` 工具**：主 Planner 在对话中按需创建任务，支持定时/延迟参数
+- **Planner `subagent_create` 工具**：主 Planner 在对话中按需创建后台子代理任务，支持定时/延迟参数
 - **跨插件 API**：其他 MaiBot 插件经 `api_expose` 层创建任务
 
 任务模型相关的配置键位于 `config.py:100-140` 的 `TaskConfig` 节：`max_concurrent_tasks`（并发上限，默认 4）、`max_runtime_min`（agent 任务总时长兜底，0 = 不限，超时由调度器 `_check_loop()` 强制转 FAILED，`core/scheduler.py:464`）、`default_timeout_min`（ask_user 挂起等待时间，见已知限制）、`persist_history`（是否持久化完整任务历史）。
@@ -93,7 +93,7 @@ cron 任务完成后经 `force()` 重置回 `scheduled` 等待下次触发（`co
 
 2. **default_timeout_min 未被消费**。配置键 `default_timeout_min`（`config.py:124`）已声明默认 10 分钟，但 AgentLoop 的 `resume_event.wait()`（`executor/agent_loop.py:213`）无超时参数，调度器 `_check_loop()` 也不检查 WAITING_INPUT 状态的停留时长。ask_user 挂起会无限等待，不会因超时自动取消。
 
-3. **task_delete / task_cancel 命名不一致**。对外暴露给 Planner 的工具名为 `task_delete`（`plugin.py:298`），命令名为 `task_cancel`（`plugin.py:447`），两者指向同一取消能力但名称不统一，可能在文档和 LLM 调用中造成混淆。
+3. **subagent_delete / task_cancel 命名不一致**。对外暴露给 Planner 的工具名为 `subagent_delete`（`plugin.py:312`），命令名为 `task_cancel`（`plugin.py:447`），两者指向同一取消能力但名称不统一，可能在文档和 LLM 调用中造成混淆。
 
 ### 关联文档
 

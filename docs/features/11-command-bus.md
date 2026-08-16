@@ -66,7 +66,7 @@ Agent 任务执行需要跨组件协作：调度器要往运行中的 AgentLoop 
 
 命令总线是纯内部机制，无独立配置项，也不需要用户操作。开发者接触它的场景有两类：
 
-- **注入指令**：`/task ask` 命令与 Planner 的 `task_modify` 工具最终都经 `TaskManager.handle_injection`（`core/task_manager.py`）→ `TaskControl.handle_injection` 发送 `INJECT_INSTRUCTION`。
+- **注入指令**：`/task ask` 命令与 Planner 的 `subagent_modify` 工具最终都经 `TaskManager.handle_injection`（`core/task_manager.py`）→ `TaskControl.handle_injection` 发送 `INJECT_INSTRUCTION`。
 - **唤醒任务**：用户在聊天流回复后，`chat.receive.after_process` Hook 触发 `TaskManager.handle_user_reply`（`core/task_manager.py`）→ `TaskControl.handle_user_reply` 匹配 WAITING_INPUT 任务并发送 `RESUME_REPLY`。
 
 ### 已知限制

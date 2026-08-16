@@ -2,7 +2,7 @@
   "manifest_version": 2,
   "version": "0.1.0",
   "name": "离线多线程 Agent 插件（Oh-Mai-Agent）",
-  "description": "离线多线程 Agent 插件：两级任务模型（essential/planner）、定时任务（cron/delay）、MCP 工具集成、跨插件协作、shell 命令执行、Planner 任务看板",
+  "description": "离线多线程 Agent 插件：后台子代理任务管理（instant/agent 两级）、定时任务（cron/delay）、MCP 工具集成、跨插件协作、shell 命令执行、Planner 待办看板",
   "author": {
     "name": "Dreamwxz",
     "url": "https://github.com/Dreamwxz"

@@ -43,7 +43,7 @@ def test_unregister_stale_mcp_tools_removes_absent_mcp_tools() -> None:
         return {"success": True}
 
     reg = ToolRegistry()
-    for name in ("mcp_a_x", "mcp_b_y", "task_create"):
+    for name in ("mcp_a_x", "mcp_b_y", "subagent_create"):
         reg.register(
             ToolDefinition(
                 name=name,
@@ -58,12 +58,12 @@ def test_unregister_stale_mcp_tools_removes_absent_mcp_tools() -> None:
     unregister_stale_mcp_tools(reg, {"mcp_b_y"})
     assert reg.get("mcp_a_x") is None
     assert reg.get("mcp_b_y") is not None
-    assert reg.get("task_create") is not None
+    assert reg.get("subagent_create") is not None
 
     # 空列表：全部 mcp_* 工具注销，非 mcp_ 工具保留
     unregister_stale_mcp_tools(reg, set())
     assert reg.get("mcp_b_y") is None
-    assert reg.get("task_create") is not None
+    assert reg.get("subagent_create") is not None
 
 
 def test_stdio_module_available_positive_and_negative() -> None:

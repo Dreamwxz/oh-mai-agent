@@ -626,11 +626,11 @@ class TestToolTaskCreateReplyStreamId:
     """@Tool task_create 处理器应提取并透传 reply_stream_id。"""
 
     @pytest.mark.asyncio
-    async def test_tool_task_create_passes_reply_stream_id(
+    async def test_tool_subagent_create_passes_reply_stream_id(
         self, plugin: MaibotAgentPlugin,
     ) -> None:
-        """传入 reply_stream_id kwarg 时，_tool_task_create 将其转发给 create_task。"""
-        result = await plugin._tool_task_create(
+        """传入 reply_stream_id kwarg 时，_tool_subagent_create 将其转发给 create_task。"""
+        result = await plugin._tool_subagent_create(
             intent="跨流回复任务",
             stream_id="qq:g:1",
             reply_stream_id="qq:g:2",
@@ -641,11 +641,11 @@ class TestToolTaskCreateReplyStreamId:
         assert tm.created[0]["reply_stream_id"] == "qq:g:2"
 
     @pytest.mark.asyncio
-    async def test_tool_task_create_reply_stream_id_absent(
+    async def test_tool_subagent_create_reply_stream_id_absent(
         self, plugin: MaibotAgentPlugin,
     ) -> None:
         """未传入 reply_stream_id kwarg 时，create_task 收到 None。"""
-        result = await plugin._tool_task_create(
+        result = await plugin._tool_subagent_create(
             intent="默认回复流任务",
             stream_id="qq:g:1",
         )

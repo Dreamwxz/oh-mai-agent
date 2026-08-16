@@ -162,7 +162,7 @@ refactor(domain): remove planner task level and legacy level map
 |---|---|---|
 | `api_expose.py` | `max_level` 声明但未执行，6 个端点全部 public=true | [04-permission](docs/features/04-permission.md) |
 | `domain/task_record.py` | 无 schema 版本管理，数据模型升级无法自动迁移 | [01-task-model](docs/features/01-task-model.md) |
-| `plugin.py` | 对外 @Tool 名 `task_delete` 与 @Command 名 `task_cancel` 不一致 | [01-task-model](docs/features/01-task-model.md) |
+| `plugin.py` | 对外 @Tool 名 `subagent_delete` 与 @Command 名 `task_cancel` 不一致 | [01-task-model](docs/features/01-task-model.md) |
 | `config.py [task]` | `default_timeout_min` 已配置但实际未执行 | [14-config](docs/features/14-config.md) |
 | `config.py [task]` | `persist_history` 已配置但实际未执行（任务历史始终持久化） | [03-persistence-recovery](docs/features/03-persistence-recovery.md) |
 | `tools/mcp/connection.py` | stdio 发送侧固定 newline 帧（适配 MCP SDK <2.0；读取侧双格式兼容）；若宿主切换 mcp SDK 2.0 需适配发送侧，manifest 已 pin `mcp>=1.1.3,<2.0.0` | [08-mcp](docs/features/08-mcp.md) |

@@ -47,7 +47,11 @@ Agent 级任务的核心是 LLM 推理加工具调用。每轮 LLM 调用都要�
 - 跨插件 API（tools/agent/plugin_api_tools.py）：扫描 `ctx.api.list()` 动态生成 `call_{api_name}` 工具。
 - 命令执行（tools/agent/shell_tools.py 的 `build_shell_tools`）：`run_command`，跨平台（Windows 自动用 cmd.exe，Linux/macOS 用 /bin/sh），仅 admin 可调用，超时强杀进程树 + 输出截断。详见 [命令执行](./16-shell.md)。
 
-**Planner 通道（tools/planner/）**。主 Planner 通过 11 个 `@Tool` 装饰器（plugin.py:138/166/219/242/264/292/314/336/371/426/434）看到的安全子集。handler 全部懒构建（`_get_planner_tool`，plugin.py:112-132）：`search_users` 走独立工厂，`send_message` 与 Agent 循环版共用 `tools/send_message.py` 的实现，7 个 `task_*` 经 `build_task_tools(self._task_manager)`（tools/planner/task_tools.py:30-311）从 TaskManager 门面取，`list_mcp_tools` / `call_mcp_tool` 两个 MCP 代理工具经 `tools/planner/mcp_tools.py` 的工厂函数构建。Planner 调用者角色恒为 ADMIN（`_planner_caller_role`，task_tools.py:25-27），owner 标识为 `planner:{stream_id}`（20-22）。
+**Planner 通道（tools/planner/）**。主 Planner 通过 11 个 `@Tool` 装饰器（plugin.py:158/186/239/262/284/312/334/356/391/400/408）看到的安全子集，其中 7 个 `subagent_*` 后台子代理管理工具 + `search_users` + `send_message` + 2 个 MCP 代理工具。handler 全部懒构建（`_get_planner_tool`，plugin.py:131-150）：`search_users` 走独立工厂，`send_message` 与 Agent 循环版共用 `tools/send_message.py` 的实现，7 个 `subagent_*` 经 `build_task_tools(self._task_manager)`（tools/planner/task_tools.py:31-311）从 TaskManager 门面取，`list_mcp_tools` / `call_mcp_tool` 两个 MCP 代理工具经 `tools/planner/mcp_tools.py` 的工厂函数构建。Planner 调用者角色恒为 ADMIN（`_planner_caller_role`，task_tools.py:26-28），owner 标识为 `planner:{stream_id}`（21-23）。
+
+工具名 `subagent_*` 传达「后台子代理」心智模型：Planner 创建的任务会交由独立 Agent 在后台自主执行，而非一条待办记录。可见性（visibility）由 MaiBot 宿主决定呈现方式：`visible` 每轮直接进工具列表，`deferred` 在 system-reminder 中列出描述、需经内置 `tool_search` 按名称/描述关键词激活。
+
+**流隔离**：任务类工具只允许操作当前会话流的任务。MaiBot Host 调用工具时注入 `chat_id`（当前会话流，schema 无此参数、LLM 不可伪造），handler 比对 LLM 传入的 `stream_id` 与 `chat_id`，不一致即拒绝（`_current_stream_error`，task_tools.py），防止跨流访问其他会话的 planner 任务。`send_message` 的目标三选一保留跨流（bot 主动向其他群/人发消息是合法能力）。
 
 **Synthetic 通道（tools/synthetic/）**。`list_tools` / `get_tool_schema` 两个发现工具，现为兜底兼容（不再进入 Agent 循环 schema），见上文。
 
@@ -60,25 +64,27 @@ Agent 级任务的核心是 LLM 推理加工具调用。每轮 LLM 调用都要�
 - 执行阶段：`registry.execute(name, role, **kwargs)`（tools/registry.py:177-205）执行前二次门控，权限不足返回 `permission denied`。
 - 文件工具还有第三道防线：`FileAccessPolicy` 沙箱（tools/agent/file_tools.py:50），role_provider 来自 `current_task` ContextVar，攻击者无法伪造角色。
 
-**安全设计**：暴露给 Planner 的 11 个 @Tool 是任务管理安全子集（含 MCP 代理工具）。文件写操作、宿主机命令执行等危险工具只在 Agent 循环内可用且仅对 admin 可见（`run_command` 还从子 Agent 允许集中排除），Planner 即使被提示词注入也无法写宿主机文件或执行命令。
+**安全设计**：暴露给 Planner 的 11 个 @Tool 是后台子代理管理安全子集（含 MCP 代理工具）。文件写操作、宿主机命令执行等危险工具只在 Agent 循环内可用且仅对 admin 可见（`run_command` 还从子 Agent 允许集中排除），Planner 即使被提示词注入也无法写宿主机文件或执行命令。
 
 ## 使用与配置
 
 ### 11 个 @Tool 清单
 
-| # | 工具名 | 装饰器位置 | 功能 |
-|---|---|---|---|
-| 1 | `search_users` | plugin.py:138 | 按昵称/名字/ID 搜索用户，返回 user_id、昵称、群信息 |
-| 2 | `task_create` | plugin.py:166 | 创建任务（支持延迟/cron） |
-| 3 | `task_list` | plugin.py:219 | 列出当前流任务（可按状态过滤） |
-| 4 | `task_status` | plugin.py:242 | 查询单个任务详情 |
-| 5 | `task_modify` | plugin.py:264 | 向运行中任务注入指令 |
-| 6 | `task_delete` | plugin.py:292 | 取消/删除任务 |
-| 7 | `task_history` | plugin.py:314 | 查看任务执行历史 |
-| 8 | `task_schedule` | plugin.py:336 | 创建定时任务（cron 表达式） |
-| 9 | `send_message` | plugin.py:371 | 向好友/群/指定聊天流发送消息（目标三选一，默认润色 + 长文本分割） |
-| 10 | `list_mcp_tools` | plugin.py:426 | 列出所有已连接的 MCP 服务器及其可用工具 |
-| 11 | `call_mcp_tool` | plugin.py:434 | 调用 MCP 服务器的工具 |
+| # | 工具名 | 可见性 | 装饰器位置 | 功能 |
+|---|---|---|---|---|
+| 1 | `search_users` | deferred | plugin.py:158 | 按昵称/名字/ID 搜索用户，返回 user_id 供 send_message 定位 |
+| 2 | `subagent_create` | visible | plugin.py:186 | 创建后台子代理任务（支持延迟），交由独立 Agent 后台执行 |
+| 3 | `subagent_list` | visible | plugin.py:239 | 列出当前流子代理任务（可按状态过滤） |
+| 4 | `subagent_status` | visible | plugin.py:262 | 查询单个任务详情快照 |
+| 5 | `subagent_modify` | deferred | plugin.py:284 | 向运行中/等待输入任务注入新指令 |
+| 6 | `subagent_delete` | visible | plugin.py:312 | 取消/删除任务 |
+| 7 | `subagent_history` | deferred | plugin.py:334 | 查看任务执行历史时间线 |
+| 8 | `subagent_schedule` | visible | plugin.py:356 | 创建定时/周期任务（cron 表达式） |
+| 9 | `send_message` | deferred | plugin.py:391 | 向好友/群/指定聊天流发送消息（目标三选一，默认润色 + 长文本分割） |
+| 10 | `list_mcp_tools` | deferred | plugin.py:400 | 列出所有已连接的 MCP 服务器及其可用工具 |
+| 11 | `call_mcp_tool` | deferred | plugin.py:408 | 调用 MCP 服务器的工具 |
+
+visible（5 个）：高频的创建/查询/取消/定时操作每轮直接可见；deferred（6 个）：低频或进阶操作（注入指令、历史、发消息、MCP 代理、用户搜索）经 `tool_search` 发现后激活。每个 description 都按「定位 + 何时用 + 与相邻工具区分」编写，deferred 工具的描述同时充当 `tool_search` 的关键词索引（如「定时」「历史」「消息」）。
 
 通过 `list_mcp_tools` + `call_mcp_tool` 两个代理工具，Planner 可以**发现和调用**所有已配置的 MCP 工具，无需为每个 MCP 工具单独注册 `@Tool`。
 

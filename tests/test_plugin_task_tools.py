@@ -1,7 +1,7 @@
-"""plugin.py — @Tool task_* handler 委托、create_plugin 与 on_planner_before_request。
+"""plugin.py — @Tool subagent_* handler 委托、create_plugin 与 on_planner_before_request。
 
 @Tool 声明本体由 test_plugin_registration / test_planner_tool_meta 覆盖；
-本文件验证 7 个 task_* handler 的懒构建委托链（plugin → build_task_tools
+本文件验证 7 个 subagent_* handler 的懒构建委托链（plugin → build_task_tools
 → FakeTaskManager），以及模块级工厂 create_plugin 与看板 Hook 委托。
 """
 
@@ -33,7 +33,7 @@ def plugin_with_tm(store: TaskStore) -> MaibotAgentPlugin:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# @Tool task_* handler 委托
+# @Tool subagent_* handler 委托
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class TestToolTaskHandlers:
@@ -42,7 +42,7 @@ class TestToolTaskHandlers:
         self, plugin_with_tm: MaibotAgentPlugin,
     ) -> None:
         p = plugin_with_tm
-        result = await p._tool_task_create(
+        result = await p._tool_subagent_create(
             intent="写周报", stream_id="qq:group:1", level="agent",
         )
         assert result["success"] is True
@@ -54,7 +54,7 @@ class TestToolTaskHandlers:
         self, store: TaskStore, plugin_with_tm: MaibotAgentPlugin,
     ) -> None:
         await store.save(make_task("task-abc", title="T", stream_id="qq:group:1"))
-        result = await plugin_with_tm._tool_task_list(stream_id="qq:group:1")
+        result = await plugin_with_tm._tool_subagent_list(stream_id="qq:group:1")
         assert result["success"] is True
         assert result["count"] == 1
 
@@ -63,7 +63,7 @@ class TestToolTaskHandlers:
         self, store: TaskStore, plugin_with_tm: MaibotAgentPlugin,
     ) -> None:
         await store.save(make_task("task-abc", title="T"))
-        result = await plugin_with_tm._tool_task_status(
+        result = await plugin_with_tm._tool_subagent_status(
             task_id="task-abc", stream_id="qq:1",
         )
         assert result["success"] is True
@@ -75,7 +75,7 @@ class TestToolTaskHandlers:
     ) -> None:
         """Planner 传标题（而非 ID）时 task_status 仍能解析（回归：任务不存在）。"""
         await store.save(make_task("task-abc", title="系统环境检查"))
-        result = await plugin_with_tm._tool_task_status(
+        result = await plugin_with_tm._tool_subagent_status(
             task_id="系统环境检查", stream_id="qq:1",
         )
         assert result["success"] is True
@@ -85,7 +85,7 @@ class TestToolTaskHandlers:
     async def test_task_modify_delegates(
         self, plugin_with_tm: MaibotAgentPlugin,
     ) -> None:
-        result = await plugin_with_tm._tool_task_modify(
+        result = await plugin_with_tm._tool_subagent_modify(
             task_id="t1", inject_instruction="继续", stream_id="qq:1",
         )
         assert result == {"success": True, "message": "已注入"}
@@ -94,14 +94,14 @@ class TestToolTaskHandlers:
     async def test_task_delete_delegates(
         self, plugin_with_tm: MaibotAgentPlugin,
     ) -> None:
-        result = await plugin_with_tm._tool_task_delete(task_id="t1", stream_id="qq:1")
+        result = await plugin_with_tm._tool_subagent_delete(task_id="t1", stream_id="qq:1")
         assert result == {"success": True, "message": "已取消"}
 
     @pytest.mark.asyncio
     async def test_task_history_delegates(
         self, plugin_with_tm: MaibotAgentPlugin,
     ) -> None:
-        result = await plugin_with_tm._tool_task_history(task_id="t1", stream_id="qq:1")
+        result = await plugin_with_tm._tool_subagent_history(task_id="t1", stream_id="qq:1")
         assert result["success"] is True
         assert result["count"] == 1
 
@@ -109,7 +109,7 @@ class TestToolTaskHandlers:
     async def test_task_schedule_delegates(
         self, plugin_with_tm: MaibotAgentPlugin,
     ) -> None:
-        result = await plugin_with_tm._tool_task_schedule(
+        result = await plugin_with_tm._tool_subagent_schedule(
             intent="日报", stream_id="qq:1", cron_expr="0 9 * * *",
         )
         assert result["success"] is True
@@ -121,9 +121,9 @@ class TestToolTaskHandlers:
     ) -> None:
         """同一工具名第二次调用走缓存（懒构建只发生一次）。"""
         p = plugin_with_tm
-        await p._tool_task_create(intent="x", stream_id="qq:1")
+        await p._tool_subagent_create(intent="x", stream_id="qq:1")
         first_cache = dict(p._planner_tool_cache)
-        await p._tool_task_create(intent="y", stream_id="qq:1")
+        await p._tool_subagent_create(intent="y", stream_id="qq:1")
         assert p._planner_tool_cache == first_cache
 
 

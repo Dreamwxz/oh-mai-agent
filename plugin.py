@@ -2,7 +2,7 @@
 
 MaiBot SDK 插件主入口，实现 MaibotAgentPlugin 类，提供：
 - 生命周期管理（on_load / on_unload / on_config_update）
-- 暴露给主 Planner 的安全子集 Tool（11 个工具：7 个任务管理 + search_users + send_message + 2 个 MCP 代理）
+- 暴露给主 Planner 的安全子集 Tool（11 个工具：7 个 subagent_* 后台子代理管理 + search_users + send_message + 2 个 MCP 代理）
 - /maitask 命令组（7 个 Command，含兜底帮助命令）
 - 用户回复监听（HookHandler chat.receive.after_process）
 - Planner 摘要注入 Hook（HookHandler，委托 PlannerBoard）
@@ -59,8 +59,9 @@ class MaibotAgentPlugin(MaiBotPlugin):
     2. 初始化 TaskManager → setup() 注册所有 Agent 工具
     3. 启动 scheduler → 恢复 active 任务 → 初始化 MCP
 
-    Planner 安全子集：@Tool 仅暴露任务管理 + 用户搜索/消息发送工具，
-    不暴露文件/宿主等危险操作，Planner 即使被提示词注入也无法写宿主机文件。
+    Planner 安全子集：@Tool 仅暴露后台子代理管理（subagent_*）+ 用户搜索/
+    消息发送/MCP 代理工具，不暴露文件/宿主等危险操作，Planner 即使被提示词
+    注入也无法写宿主机文件。
     """
 
     # ── SDK 类属性 ──────────────────────────────────────────────────────
@@ -182,39 +183,39 @@ class MaibotAgentPlugin(MaiBotPlugin):
         return await self._get_planner_tool("search_users")(**kwargs)
 
     @Tool(
-        "task_create",
-        description="创建一次性/延迟任务并立即调度执行。要定时/周期任务用 task_schedule；要查详情用 task_status。",
+        "subagent_create",
+        description="创建后台子代理任务并立即开始执行（可延迟）。任务会交由独立 Agent 在后台自主执行，执行结果自动汇报到任务所在聊天流；执行中可等待用户输入（subagent_status 可见 waiting_input），也可用 subagent_modify 注入新指令调整方向。用户提出需要多步骤或耗时处理的需求（如「帮我爬取数据」「整理这份文档」）时使用。一次性任务用本工具；定时/周期任务用 subagent_schedule；查任务状态用 subagent_list / subagent_status。",
         visibility="visible",
         parameters=[
             ToolParameterInfo(
                 name="intent",
                 param_type=ToolParamType.STRING,
-                description="任务意图描述",
+                description="任务意图描述（要后台子代理做什么）",
                 required=True,
             ),
             ToolParameterInfo(
                 name="stream_id",
                 param_type=ToolParamType.STRING,
-                description="目标聊天流 ID",
+                description="任务所属聊天流 ID（必须是当前会话流，任务结果将汇报到此流）",
                 required=True,
             ),
             ToolParameterInfo(
                 name="level",
                 param_type=ToolParamType.STRING,
-                description="执行级别 instant/agent，不填默认 agent；仅纯消息提醒类任务（定时发消息）用 instant",
+                description="执行级别：agent=由独立 Agent 自主推理执行（默认，适合多步骤复杂任务）；instant=立即执行单个动作（仅适合纯消息类任务，如定时提醒、自动回复）",
                 enum_values=["instant", "agent"],
                 required=False,
             ),
             ToolParameterInfo(
                 name="delay_seconds",
                 param_type=ToolParamType.INTEGER,
-                description="延迟秒数",
+                description="延迟秒数，到点后开始执行",
                 required=False,
             ),
             ToolParameterInfo(
                 name="cron_expr",
                 param_type=ToolParamType.STRING,
-                description="cron 表达式（如非必要勿用，周期任务请用 task_schedule）",
+                description="cron 表达式（不推荐，常规定时/周期任务请用 subagent_schedule）",
                 required=False,
             ),
             ToolParameterInfo(
@@ -231,18 +232,18 @@ class MaibotAgentPlugin(MaiBotPlugin):
             ),
         ],
     )
-    async def _tool_task_create(self, **kwargs: Any) -> dict[str, Any]:
-        return await self._get_planner_tool("task_create")(**kwargs)
+    async def _tool_subagent_create(self, **kwargs: Any) -> dict[str, Any]:
+        return await self._get_planner_tool("subagent_create")(**kwargs)
 
     @Tool(
-        "task_list",
-        description="列出任务（可按 stream/status 过滤）。",
+        "subagent_list",
+        description="列出当前聊天流的子代理任务，可按状态过滤。用户询问任务进展（「我的任务怎么样了」「有哪些任务在跑」）时使用；看单个任务详情用 subagent_status，看执行时间线用 subagent_history，要取消用 subagent_delete。",
         visibility="visible",
         parameters=[
             ToolParameterInfo(
                 name="stream_id",
                 param_type=ToolParamType.STRING,
-                description="聊天流 ID",
+                description="任务所属聊天流 ID（必须是当前会话流）",
                 required=True,
             ),
             ToolParameterInfo(
@@ -254,12 +255,12 @@ class MaibotAgentPlugin(MaiBotPlugin):
             ),
         ],
     )
-    async def _tool_task_list(self, **kwargs: Any) -> dict[str, Any]:
-        return await self._get_planner_tool("task_list")(**kwargs)
+    async def _tool_subagent_list(self, **kwargs: Any) -> dict[str, Any]:
+        return await self._get_planner_tool("subagent_list")(**kwargs)
 
     @Tool(
-        "task_status",
-        description="查看单个任务当前详情（快照）。task_id 支持完整 ID、唯一前缀或唯一标题。要看执行历史用 task_history。",
+        "subagent_status",
+        description="查看单个子代理任务的当前详情快照（状态、进度、错误等）。task_id 支持完整 ID、唯一前缀或唯一标题。用户问某个具体任务的情况时使用；要查看完整执行历史用 subagent_history。",
         visibility="visible",
         parameters=[
             ToolParameterInfo(
@@ -271,17 +272,17 @@ class MaibotAgentPlugin(MaiBotPlugin):
             ToolParameterInfo(
                 name="stream_id",
                 param_type=ToolParamType.STRING,
-                description="聊天流 ID",
+                description="任务所属聊天流 ID（必须是当前会话流）",
                 required=True,
             ),
         ],
     )
-    async def _tool_task_status(self, **kwargs: Any) -> dict[str, Any]:
-        return await self._get_planner_tool("task_status")(**kwargs)
+    async def _tool_subagent_status(self, **kwargs: Any) -> dict[str, Any]:
+        return await self._get_planner_tool("subagent_status")(**kwargs)
 
     @Tool(
-        "task_modify",
-        description="修改任务或注入指令。task_id 支持完整 ID、唯一前缀或唯一标题。注意：注入指令仅管理员可用。",
+        "subagent_modify",
+        description="向运行中或等待输入的子代理任务注入新指令，实时调整其执行方向。用户想改变正在进行的任务（「换个格式」「先做 X 再继续」）时使用；任务结束后无法注入，需重新创建。注意：注入指令仅管理员可用。",
         visibility="deferred",
         parameters=[
             ToolParameterInfo(
@@ -299,17 +300,17 @@ class MaibotAgentPlugin(MaiBotPlugin):
             ToolParameterInfo(
                 name="stream_id",
                 param_type=ToolParamType.STRING,
-                description="聊天流 ID",
+                description="任务所属聊天流 ID（必须是当前会话流）",
                 required=True,
             ),
         ],
     )
-    async def _tool_task_modify(self, **kwargs: Any) -> dict[str, Any]:
-        return await self._get_planner_tool("task_modify")(**kwargs)
+    async def _tool_subagent_modify(self, **kwargs: Any) -> dict[str, Any]:
+        return await self._get_planner_tool("subagent_modify")(**kwargs)
 
     @Tool(
-        "task_delete",
-        description="取消/删除任务。task_id 支持完整 ID、唯一前缀或唯一标题。不可恢复，请谨慎操作。",
+        "subagent_delete",
+        description="取消/删除子代理任务，不可恢复，请谨慎操作。用户不想让任务继续时使用；定时任务取消后不再触发。",
         visibility="visible",
         parameters=[
             ToolParameterInfo(
@@ -321,17 +322,17 @@ class MaibotAgentPlugin(MaiBotPlugin):
             ToolParameterInfo(
                 name="stream_id",
                 param_type=ToolParamType.STRING,
-                description="聊天流 ID",
+                description="任务所属聊天流 ID（必须是当前会话流）",
                 required=True,
             ),
         ],
     )
-    async def _tool_task_delete(self, **kwargs: Any) -> dict[str, Any]:
-        return await self._get_planner_tool("task_delete")(**kwargs)
+    async def _tool_subagent_delete(self, **kwargs: Any) -> dict[str, Any]:
+        return await self._get_planner_tool("subagent_delete")(**kwargs)
 
     @Tool(
-        "task_history",
-        description="查看任务执行历史时间线。task_id 支持完整 ID、唯一前缀或唯一标题。看当前状态用 task_status。",
+        "subagent_history",
+        description="查看子代理任务的完整执行历史时间线（创建、运行、提问、完成/失败等事件）。排查任务为什么失败、回答「任务经历了什么」时使用；看当前状态用 subagent_status。",
         visibility="deferred",
         parameters=[
             ToolParameterInfo(
@@ -343,29 +344,29 @@ class MaibotAgentPlugin(MaiBotPlugin):
             ToolParameterInfo(
                 name="stream_id",
                 param_type=ToolParamType.STRING,
-                description="聊天流 ID",
+                description="任务所属聊天流 ID（必须是当前会话流）",
                 required=True,
             ),
         ],
     )
-    async def _tool_task_history(self, **kwargs: Any) -> dict[str, Any]:
-        return await self._get_planner_tool("task_history")(**kwargs)
+    async def _tool_subagent_history(self, **kwargs: Any) -> dict[str, Any]:
+        return await self._get_planner_tool("subagent_history")(**kwargs)
 
     @Tool(
-        "task_schedule",
-        description="创建定时任务（cron）。一次性任务请用 task_create。",
-        visibility="deferred",
+        "subagent_schedule",
+        description="创建定时/周期执行的子代理任务（cron 表达式），到点由后台自动执行，结果汇报到任务所在聊天流。用户要求「每天/每周定时」「定时提醒我」时使用；一次性任务用 subagent_create。注意：cron 频率不要过高（「* * * * *」表示每分钟执行，慎用）。",
+        visibility="visible",
         parameters=[
             ToolParameterInfo(
                 name="intent",
                 param_type=ToolParamType.STRING,
-                description="任务意图描述",
+                description="任务意图描述（到点后后台子代理要做什么）",
                 required=True,
             ),
             ToolParameterInfo(
                 name="stream_id",
                 param_type=ToolParamType.STRING,
-                description="聊天流 ID",
+                description="任务所属聊天流 ID（必须是当前会话流，任务结果将汇报到此流）",
                 required=True,
             ),
             ToolParameterInfo(
@@ -377,14 +378,14 @@ class MaibotAgentPlugin(MaiBotPlugin):
             ToolParameterInfo(
                 name="level",
                 param_type=ToolParamType.STRING,
-                description="执行级别 instant/agent，不填默认 agent；仅纯消息提醒类任务（定时发消息）用 instant",
+                description="执行级别：agent=由独立 Agent 自主推理执行（默认，适合多步骤复杂任务）；instant=立即执行单个动作（仅适合纯消息类任务，如定时提醒、自动回复）",
                 enum_values=["instant", "agent"],
                 required=False,
             ),
         ],
     )
-    async def _tool_task_schedule(self, **kwargs: Any) -> dict[str, Any]:
-        return await self._get_planner_tool("task_schedule")(**kwargs)
+    async def _tool_subagent_schedule(self, **kwargs: Any) -> dict[str, Any]:
+        return await self._get_planner_tool("subagent_schedule")(**kwargs)
 
     @Tool(
         "send_message",
@@ -397,7 +398,7 @@ class MaibotAgentPlugin(MaiBotPlugin):
 
     @Tool(
         "list_mcp_tools",
-        description="列出所有已连接的 MCP 服务器及其可用工具。调用 call_mcp_tool 前先用此工具了解有哪些工具可用。",
+        description="列出所有已连接的 MCP 服务器及其可用工具。需要外部能力（网页抓取、搜索等）时先用本工具了解有哪些可用工具，再调用 call_mcp_tool。",
         visibility="deferred",
     )
     async def _tool_list_mcp_tools(self, **kwargs: Any) -> dict[str, Any]:
@@ -405,7 +406,7 @@ class MaibotAgentPlugin(MaiBotPlugin):
 
     @Tool(
         "call_mcp_tool",
-        description="调用 MCP 服务器的工具。先用 list_mcp_tools 查看可用的服务器和工具列表。arguments 是 JSON 字符串或对象，参数结构由具体工具决定。",
+        description="调用 MCP 服务器的工具（如抓取网页、查询外部数据）。先用 list_mcp_tools 查看可用的服务器和工具列表；arguments 是 JSON 字符串或对象，参数结构由具体工具决定。",
         visibility="deferred",
         parameters=[
             ToolParameterInfo(
