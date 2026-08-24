@@ -183,6 +183,7 @@ class TaskManager:
             role_provider=self._current_task_role,
             ask_callback=self._ask_callback,
             create_task=self.create_task,
+            cancel_task=self.cancel_task,
             handle_injection=self.handle_injection,
             get_current_task=lambda: current_task.get(),
             sender=self._sender,

@@ -21,7 +21,7 @@ MaiBot 的插件生态里，插件之间需要协作。oh-mai-agent 掌握着完
 
 参数处理是防御性的：所有关键参数经 `str()` 强制转字符串，数值参数经 `_to_int(val, default)` 安全转换，缺失时落到默认值（如 `limit` 默认 50）；每个 handler 外层都有 `try/except Exception` 兜底，任意异常转为 `{"success": False, "error": str(exc)}`，不让异常穿透到 SDK 调用方。
 
-一个关键设计决策是 `_caller_role = Role.ADMIN`（api_expose.py 的 `_CALLER_ROLE`）。所有 handler 都以 ADMIN 身份调用 TaskManager，因为跨插件调用被视为受信任的内部通信，不应被面向用户的 owner 权限检查阻拦——MaiBot 的插件均为部署者手动安装的代码，插件间互信是架构前提。6 个端点描述符的 `"public"` 字段全部为 `True`，对所有插件无门槛可见（Host 侧 `_is_api_visible_to_plugin` 仅凭 `entry.plugin_id == caller_plugin_id or entry.public` 判定）。这个信任模型沿 Agent 侧 `call_{api}` 工具链继承后产生一个已知边界，详见「已知限制」。
+一个关键设计决策是调用方身份的解析（api_expose.py 的 `_resolve_caller`）。SDK 的 `api.call` 通道不携带调用方身份（Host 侧 `_cap_api_call` 只转发 api_name/version/args），因此**无身份参数的调用按 ADMIN 处理**——跨插件调用被视为受信任的内部通信，不应被面向用户的 owner 权限检查阻拦（MaiBot 的插件均为部署者手动安装的代码，插件间互信是架构前提）。6 个端点描述符的 `"public"` 字段全部为 `True`，对所有插件无门槛可见（Host 侧 `_is_api_visible_to_plugin` 仅凭 `entry.plugin_id == caller_plugin_id or entry.public` 判定）。handler 同时接受并校验调用方显式携带的身份参数（`_caller_role` / `_caller_owner` / `_caller_stream_id`）：身份低于 ADMIN 时按身份锁定 owner / stream_id，不能以他人身份查看/控制任务，create 不能为他人或跨流建任务、执行角色不可自升；非法身份值按 GUEST fail-closed。Agent 侧 call_* 工具链的提权路径已封闭（显式允许名单 + 最低 ADMIN + 自身端点排除），详见「已知限制」。
 
 ### 组装位置：lifecycle.py 第 10 步
 
@@ -33,18 +33,20 @@ MaiBot 的插件生态里，插件之间需要协作。oh-mai-agent 掌握着完
 
 > 架构变更：v0.1.0 曾尝试把 instant 任务迁到独立子进程，后回退到进程内 contextvars + usecase 分层。TaskManager 从编排器降级为门面 + 组装器，跨插件 API 的调用点不变，底层逻辑下沉到 usecases。
 
-### 向内扫描：call_{api} 动态工具
+### 向内扫描：call_{api} 动态工具（显式允许名单）
 
-Agent 循环内要调用其他插件的 API，不能预先把所有工具写死，因为插件生态是动态的。设计选择是运行时扫描：`TaskManager.setup()` 的第 6 步（`core/task_manager.py:213-222`）调用 `refresh_plugin_api_tools(ctx_api)`（`tools/agent/plugin_api_tools.py:67-135`），扫描 `ctx.api.list()` 返回的可见 API 列表，为每个 API 生成一个 `ToolDefinition`：
+Agent 循环内要调用其他插件的 API，不能预先把所有工具写死，因为插件生态是动态的。设计选择是运行时扫描：`TaskManager.setup()` 的第 6 步（`executor/tool_registrar.py` 的 `register_agent_tools`）调用 `refresh_plugin_api_tools(ctx_api, allowed_apis=[plugin_api].allowlist)`（`tools/agent/plugin_api_tools.py` 的 `refresh_plugin_api_tools`），扫描 `ctx.api.list()` 返回的可见 API 列表，为**允许名单内**的每个 API 生成一个 `ToolDefinition`：
 
 - 工具名 `call_{api_name}`（API 名中的 `.` 替换为 `_`）
 - 参数统一为松散的 `args` 对象，键值对应 API 参数
 - `visibility="discoverable"`，归入 Discoverable 层，Agent 经 `list_tools` 按需发现
-- `min_role=Role.USER`
+- **`min_role=Role.ADMIN`（固定，不可低于）**：guest / user 级 Agent 不可见、不可调用
+- **显式允许名单**：仅 `[plugin_api].allowlist` 内的 API 被包装；名单为空（默认）时不暴露任何 call_* 工具
+- **自身端点排除**：本插件 6 个任务端点（create / list / get / cancel / inject / history）永远不包装——Agent 操作任务一律走原生 owner 隔离工具（list_my_tasks / create_subtask / inject_task / cancel_task）
 
-生成的工具注册进 ToolRegistry（`core/task_manager.py:218-219`）。工具 handler 是 `_build_handler` 闭包（`plugin_api_tools.py:65-89`），内部执行 `ctx.api.call(api_name, **args)` 透传目标 API，dict 结果直接返回，其他类型包装为 `{"success": True, "result": ...}`，异常转为 `{"success": False, "error": ...}` 不向上抛出，让 Agent 循环把失败当作普通工具输出处理。
+生成的工具注册进 ToolRegistry。工具 handler 是 `_build_handler` 闭包（`plugin_api_tools.py` 的 `_build_handler`），内部执行 `ctx.api.call(api_name, **args)` 透传目标 API，dict 结果直接返回，其他类型包装为 `{"success": True, "result": ...}`，异常转为 `{"success": False, "error": ...}` 不向上抛出，让 Agent 循环把失败当作普通工具输出处理；透传前剥离保留身份参数（`_caller_*`），防止经工具通道伪造调用方身份。
 
-扫描逻辑做了多层容错：`ctx.api.list()` 返回 list 或 `{"apis": [...]}` 都能归一化（`_normalize_api_list`，`plugin_api_tools.py`），缺 `api_name` 的条目跳过，扫描异常回退为空列表不阻断工具注册。生产环境使用异步版 `refresh_plugin_api_tools()`，由 `TaskManager.setup()` 在 async 上下文中调用。
+扫描逻辑做了多层容错：`ctx.api.list()` 返回 list 或 `{"apis": [...]}` 都能归一化（`_normalize_api_list`，`plugin_api_tools.py`），条目兼容 Host 的 `name` 字段与 mock 的 `api_name` 字段，缺名的条目跳过，扫描异常回退为空列表不阻断工具注册。生产环境使用异步版 `refresh_plugin_api_tools()`，由 `TaskManager.setup()` 在 async 上下文中调用。
 
 ## 使用与配置
 
@@ -73,28 +75,28 @@ ctx.api.call("create", intent="整理聊天记录", owner="qq:1",
 
 ### Agent 侧调用其他插件
 
-与向外暴露对称，Agent 侧经动态工具向内调用。`TaskManager.setup()` 注册完成后，Agent 在循环中先 `list_tools` 发现 `call_{api_name}` 工具，再通过 `get_tool_schema` 获取参数定义，最后把目标 API 的参数放进 `args` 对象调用。`_build_handler` 闭包（`plugin_api_tools.py:65-89`）把调用转发为 `ctx.api.call(api_name, **args)`，结果按规则透传或包装后返回给 Agent 循环。
+与向外暴露对称，Agent 侧经动态工具向内调用。仅当 `[plugin_api].allowlist` 显式配置了 API 名单时，`TaskManager.setup()` 才会注册对应的 `call_{api_name}` 工具（最低角色 ADMIN）；Agent 在循环中先 `list_tools` 发现 `call_{api_name}` 工具，再通过 `get_tool_schema` 获取参数定义，最后把目标 API 的参数放进 `args` 对象调用。`_build_handler` 闭包（`plugin_api_tools.py` 的 `_build_handler`）把调用转发为 `ctx.api.call(api_name, **args)`，结果按规则透传或包装后返回给 Agent 循环。
 
 两类 API 存在形式的对照：
 
 | 来源 | 调用者 | 工具/端点名 | 可见性 | 角色门槛 |
 |---|---|---|---|---|
-| 本插件 `build_api_handlers()` | 其他 MaiBot 插件 | `create` / `list` / `get` / `cancel` / `inject` / `history` | public=True（SDK 动态 API） | 无（ADMIN 执行） |
-| 其他插件 `ctx.api.list()` | 本插件 Agent 循环 | `call_{api_name}` | discoverable（工具注册表） | USER |
+| 本插件 `build_api_handlers()` | 其他 MaiBot 插件 | `create` / `list` / `get` / `cancel` / `inject` / `history` | public=True（SDK 动态 API） | 无身份调用按 ADMIN（受信任插件）；携带 `_caller_*` 身份时按身份锁定 |
+| 其他插件 `ctx.api.list()` | 本插件 Agent 循环 | `call_{api_name}`（仅允许名单内） | discoverable（工具注册表） | ADMIN（默认不暴露） |
 
 ### 配置
 
-跨插件 API 不再有配置节。历史 `[api_expose]` 配置节（含 `max_level` 字段，默认 `"user"`）声明了「API 最大暴露等级」，但跨插件调用不携带调用方角色、Host 侧 `public` 也只是二元可见性开关，等级过滤无法实现，该配置节已从 `config.py` 整体废弃。存量 `config.toml` 中的 `[api_expose]` 节会被静默忽略（`PluginConfigBase` 配置模型 `extra="ignore"`），无需迁移。
+跨插件 API 的 Agent 侧工具由 `[plugin_api].allowlist` 配置节控制：留空（默认）不暴露任何 call_* 工具；配置 API 名列表后仅名单内的 API 被包装，且最低角色固定为 ADMIN。历史 `[api_expose]` 配置节（含 `max_level` 字段，默认 `"user"`）声明了「API 最大暴露等级」，但跨插件调用不携带调用方角色、Host 侧 `public` 也只是二元可见性开关，等级过滤无法实现，该配置节已从 `config.py` 整体废弃。存量 `config.toml` 中的 `[api_expose]` 节会被静默忽略（`PluginConfigBase` 配置模型 `extra="ignore"`），无需迁移。
 
 ### 已知限制
 
 以下限制经代码验证，详见 [04-permission.md](./04-permission.md)：
 
 - **`max_level` 已废弃移除**：历史配置字段声明但未强制执行（`build_api_handlers` 也不接收 config 参数），6 个端点始终 `public=True`。因 SDK 模型无法表达「调用方等级」，字段已删除，不再有「配置形同虚设」的问题。
-- **handler 硬编码 ADMIN 执行（有意设计）**：所有 handler 以 `Role.ADMIN` 调用 TaskManager，owner 权限检查被旁路。这是跨插件调用「受信任内部通信」的设计决策，门控责任在部署侧（只安装可信插件）。
-- **call_* 工具继承 ADMIN 执行（已知边界）**：`refresh_plugin_api_tools` 把本插件 6 个端点也包装成 `call_{api}` 工具（min_role=USER），user 级 Agent 经 `call_list`（空 owner）可见全部任务、经 `call_cancel` / `call_pause` / `call_inject` 可控制任意任务——owner 隔离被端点内部的 ADMIN 执行绕过。原生 Agent 工具（tools/agent/task_mgmt.py）是 owner 隔离的，两条路径行为不一致。收紧方向：在 `refresh_plugin_api_tools` 的包装过程中排除本插件自身的敏感端点（create / cancel / pause / inject），使 Agent 只能经原生工具按 owner 隔离操作任务。
+- **无身份调用按 ADMIN 执行（信任模型设计）**：SDK 的 `api.call` 通道不携带调用方身份，6 个端点对无身份参数的调用（真实跨插件调用）按 ADMIN 处理，owner 权限检查被旁路。这是跨插件调用「受信任内部通信」的设计决策，门控责任在部署侧（只安装可信插件）。调用方身份契约（`_caller_*`）已实现并校验：身份低于 ADMIN 时按身份锁定 owner / stream_id，create 不能为他人或跨流建任务、执行角色不可自升。
+- **Agent 侧提权路径已封闭**：call_* 工具改为显式允许名单（默认空）+ 最低角色 ADMIN + 自身 6 个端点永不包装——user 级 Agent 无法再经 call_* 工具以 ADMIN 身份触达本插件任务端点。Agent 的任务能力收敛为原生 owner 隔离工具（list_my_tasks / create_subtask / inject_task / cancel_task，其中 cancel_task 为本次收紧新增，替代历史 call_cancel）。
 
-整体影响：用户经聊天命令、Agent 经原生工具这两条路径都有完整的角色解析与 owner 校验；跨插件调用（受信任插件）与 call_* 工具（user 级 Agent）两条路径以 ADMIN 执行，前者是设计使然，后者是当前最值得注意的边界。
+整体影响：用户经聊天命令、Agent 经原生工具这两条路径都有完整的角色解析与 owner 校验；跨插件调用（受信任插件，无身份按 ADMIN）与 call_* 工具（显式允许名单 + ADMIN 最低角色）两条路径不再重叠——后者默认不暴露，且永远无法触达本插件自身端点。
 
 ### 与工具系统的关系
 

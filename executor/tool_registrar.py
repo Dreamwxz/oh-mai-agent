@@ -60,7 +60,9 @@ class ToolWiring:
     ask_callback: Callable[[str, str], Awaitable[None]]
     """ask_user 提问回调（与 AgentLoop.on_ask 共用同一实现）。"""
     create_task: Callable[..., Awaitable[Any]]
-    """任务创建入口（create_subtask 工具用）。"""
+    """任务创建入口（create_subtask / cancel_task 工具用）。"""
+    cancel_task: Callable[..., Awaitable[Any]]
+    """任务取消入口（cancel_task 工具用，内部含 owner 校验）。"""
     handle_injection: Callable[[str, str], Awaitable[bool]]
     """指令注入入口（inject_task 工具用）。"""
     get_current_task: Callable[[], TaskRecord | None]
@@ -78,11 +80,13 @@ async def register_agent_tools(w: ToolWiring) -> None:
     （``[shell] enabled`` 可开关）。
     """
 
-    # ── 1. 任务管理工具（list_my_tasks / create_subtask / inject_task）──
+    # ── 1. 任务管理工具（list_my_tasks / create_subtask / inject_task /
+    #         cancel_task）──────────────────────────────────────────────
     for tool in build_task_mgmt_tools(
         w.store,
         w.sfmt,
         create_task=w.create_task,
+        cancel_task=w.cancel_task,
         handle_injection=w.handle_injection,
         get_current_task=w.get_current_task,
         get_current_task_role=w.role_provider,
@@ -141,11 +145,16 @@ async def register_agent_tools(w: ToolWiring) -> None:
     )
     w.registry.register(send_msg_tool)
 
-    # ── 6. 跨插件 API 工具（尽力而为）──────────────────────────────
+    # ── 6. 跨插件 API 工具（显式允许名单，默认不暴露）──────────────
+    # 仅包装 config.[plugin_api].allowlist 名单内的 API，最低角色固定 ADMIN，
+    # 本插件自身端点永远排除（见 tools/agent/plugin_api_tools.py）。
     try:
         ctx_api = getattr(w.ctx, "api", None)
         if ctx_api is not None:
-            api_tools = await refresh_plugin_api_tools(ctx_api)
+            api_tools = await refresh_plugin_api_tools(
+                ctx_api,
+                allowed_apis=w.config_getter().plugin_api.allowlist,
+            )
             for tool in api_tools:
                 w.registry.register(tool)
     except Exception:

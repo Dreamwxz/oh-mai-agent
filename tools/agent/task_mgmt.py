@@ -3,10 +3,11 @@
 提供 ``build_task_mgmt_tools`` 工厂函数，从 ``core/task_manager.py:_build_task_mgmt_tools``
 提取而来，供 TaskManager 委托调用。
 
-包含三个 discoverable（min_role=USER）工具：
+包含四个 discoverable（min_role=USER）工具：
 - list_my_tasks: 列出当前用户所有任务
 - create_subtask: 创建子任务（并行拆分）
 - inject_task: 向其他任务注入指令（运行时干预）
+- cancel_task: 取消当前属主名下的任务（owner 隔离，替代历史 call_cancel 包装）
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ def build_task_mgmt_tools(
     sfmt,
     *,
     create_task,
+    cancel_task,
     handle_injection,
     get_current_task,
     get_current_task_role,
@@ -37,12 +39,14 @@ def build_task_mgmt_tools(
         store: TaskStore 实例，用于任务查询。
         sfmt: StatusFormatter 实例，用于格式化任务状态。
         create_task: 异步可调用，签名 ``(intent, owner, platform, stream_id, level, caller_role) -> (bool, TaskRecord | str)``。
+        cancel_task: 异步可调用，签名 ``(task_id, *, caller_role, owner) -> (bool, str)``，
+            内部含 owner 校验（非 admin 只能取消自己的任务）。
         handle_injection: 异步可调用，签名 ``(task_id: str, instruction: str) -> bool``。
         get_current_task: 同步可调用，返回 ``TaskRecord | None``，从上下文变量获取当前任务。
         get_current_task_role: 同步可调用，返回 ``Role``，解析当前任务的角色。
 
     Returns:
-        三个 ``ToolDefinition`` 实例，全部为 discoverable 级别、USER 可访问。
+        四个 ``ToolDefinition`` 实例，全部为 discoverable 级别、USER 可访问。
     """
 
     # ── list_my_tasks：列出当前用户的任务 ───────────────────────
@@ -167,7 +171,34 @@ def build_task_mgmt_tools(
             else f"注入失败（任务 {task_id[:8]} 未在运行）",
         }
 
-    logger.debug("构建任务管理工具定义：list_my_tasks / create_subtask / inject_task")
+    # ── cancel_task：取消当前属主名下的任务 ────────────────────────
+    # 替代历史 call_cancel 跨插件 API 包装（后者以 ADMIN 执行、可取消任意
+    # 任务）：原生工具经 TaskManager.cancel_task 走 owner 校验，非 admin
+    # 只能取消自己的任务。
+    async def _cancel_task_handler(task_id: str = "", **kwargs: Any) -> dict:
+        current = get_current_task()
+        if current is None:
+            logger.warning("cancel_task 调用失败：无当前任务上下文")
+            return {"success": False, "error": "无当前任务上下文"}
+        if not task_id:
+            logger.warning("cancel_task 参数校验失败：缺少 task_id")
+            return {"success": False, "error": "缺少必需参数: task_id"}
+        logger.debug(
+            "cancel_task 调用：当前任务 %s，目标任务 %s",
+            current.id, task_id,
+        )
+        # owner 校验在 TaskManager.cancel_task（TaskControl）内部完成：
+        # 非 admin 取消他人任务会被拒绝。
+        ok, msg = await cancel_task(
+            task_id, caller_role=get_current_task_role(), owner=current.owner,
+        )
+        if ok:
+            logger.info("cancel_task 成功：任务 %s 已取消", task_id)
+            return {"success": True, "message": msg}
+        logger.info("cancel_task 失败：任务 %s：%s", task_id, msg)
+        return {"success": False, "error": str(msg)}
+
+    logger.debug("构建任务管理工具定义：list_my_tasks / create_subtask / inject_task / cancel_task")
     return [
         ToolDefinition(
             name="list_my_tasks",
@@ -230,6 +261,26 @@ def build_task_mgmt_tools(
                 "required": ["task_id", "instruction"],
             },
             handler=_inject_task_handler,
+            visibility="discoverable",
+            min_role=Role.USER,
+        ),
+        ToolDefinition(
+            name="cancel_task",
+            description=(
+                "取消任务（仅可取消当前属主名下的任务；"
+                "非运行中或已处于终态的任务取消失败）。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "要取消的任务 ID",
+                    },
+                },
+                "required": ["task_id"],
+            },
+            handler=_cancel_task_handler,
             visibility="discoverable",
             min_role=Role.USER,
         ),

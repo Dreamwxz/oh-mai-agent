@@ -614,15 +614,30 @@ class TestPluginApiTools:
                 return {"success": True, "result": "data"}
 
         mock_api = MockApi()
-        tools = await plugin_api_tools.refresh_plugin_api_tools(mock_api)
+        # call_* 工具需显式允许名单才暴露（默认不暴露）
+        tools = await plugin_api_tools.refresh_plugin_api_tools(
+            mock_api, allowed_apis=["test.echo"],
+        )
 
         assert len(tools) == 1
         tool = tools[0]
         assert tool.name == "call_test_echo"
+        assert tool.min_role == Role.ADMIN
 
         # 通过 handler 执行
         result = await tool.handler(args={"msg": "hello"})
         assert result == {"success": True, "result": "data"}
+
+    @pytest.mark.asyncio
+    async def test_default_exposes_no_api_tools(self) -> None:
+        """默认不允许名单：跨插件 API 不自动包装为 Agent 工具。"""
+
+        class MockApi:
+            async def list(self):
+                return [{"api_name": "test.echo", "description": "Echo API"}]
+
+        tools = await plugin_api_tools.refresh_plugin_api_tools(MockApi())
+        assert tools == []
 
     def test_normalize_api_list_list(self) -> None:
         raw = [{"api_name": "a"}, {"api_name": "b"}]

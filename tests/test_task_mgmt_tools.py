@@ -37,12 +37,13 @@ def _build(
     current_role: Role = Role.USER,
     handle_injection: AsyncMock | None = None,
 ) -> tuple[dict[str, Any], AsyncMock]:
-    """构建三个任务管理工具；返回 (name→tool 字典, handle_injection mock)。"""
+    """构建四个任务管理工具；返回 (name→tool 字典, handle_injection mock)。"""
     injection = handle_injection or AsyncMock(return_value=True)
     tools = build_task_mgmt_tools(
         manager._store,
         manager._sfmt,
         create_task=manager.create_task,
+        cancel_task=manager.cancel_task,
         handle_injection=injection,
         get_current_task=lambda: current_task,
         get_current_task_role=lambda: current_role,
@@ -220,13 +221,57 @@ class TestInjectTask:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# cancel_task
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestCancelTask:
+    @pytest.mark.asyncio
+    async def test_no_current_task_returns_error(self, manager: FakeTaskManager) -> None:
+        tools, _ = _build(manager, current_task=None)
+        result = await tools["cancel_task"].handler(task_id="t1")
+        assert result == {"success": False, "error": "无当前任务上下文"}
+
+    @pytest.mark.asyncio
+    async def test_missing_task_id_returns_error(self, manager: FakeTaskManager) -> None:
+        tools, _ = _build(manager, current_task=_current())
+        result = await tools["cancel_task"].handler(task_id="")
+        assert result == {"success": False, "error": "缺少必需参数: task_id"}
+
+    @pytest.mark.asyncio
+    async def test_success_passes_owner_and_role(self, manager: FakeTaskManager) -> None:
+        """取消时以当前任务属主 + 实时角色调用 TaskManager（内部含 owner 校验）。"""
+        tools, _ = _build(manager, current_task=_current(owner="qq:10001"))
+        result = await tools["cancel_task"].handler(task_id="mine-1")
+        assert result == {"success": True, "message": "已取消"}
+        call = manager.calls["cancel_task"][0]
+        assert call["task_id"] == "mine-1"
+        assert call["owner"] == "qq:10001"
+        assert call["caller_role"] == Role.USER
+
+    @pytest.mark.asyncio
+    async def test_failure_returns_error(self, manager: FakeTaskManager) -> None:
+        manager.fail.add("cancel_task")
+        tools, _ = _build(manager, current_task=_current())
+        result = await tools["cancel_task"].handler(task_id="t1")
+        assert result == {"success": False, "error": "cancel failed"}
+
+    @pytest.mark.asyncio
+    async def test_admin_role_passed_through(self, manager: FakeTaskManager) -> None:
+        tools, _ = _build(manager, current_task=_current(), current_role=Role.ADMIN)
+        await tools["cancel_task"].handler(task_id="t1")
+        assert manager.calls["cancel_task"][0]["caller_role"] == Role.ADMIN
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # 工具元数据
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class TestTaskMgmtMetadata:
-    def test_three_discoverable_user_tools(self, manager: FakeTaskManager) -> None:
+    def test_four_discoverable_user_tools(self, manager: FakeTaskManager) -> None:
         tools, _ = _build(manager)
-        assert set(tools) == {"list_my_tasks", "create_subtask", "inject_task"}
+        assert set(tools) == {
+            "list_my_tasks", "create_subtask", "inject_task", "cancel_task",
+        }
         for tool in tools.values():
             assert tool.visibility == "discoverable"
             assert tool.min_role == Role.USER

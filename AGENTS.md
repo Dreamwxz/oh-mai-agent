@@ -45,7 +45,9 @@ send_message）；发送出口纯发送（不写 context），跨流动机注释
 **权限与隔离**。guest / user / admin 三级角色，PermissionResolver（`permission.py`）按配置判定。
 每个 ToolDefinition 有 `min_role` 做角色过滤；文件工具二次经 FileAccessPolicy 沙箱校验，
 user 级隔离到 `data_dir/files/`。api_expose 暴露 6 个跨插件端点
-（create/list/get/cancel/inject/history）。
+（create/list/get/cancel/inject/history），handler 校验调用方身份（`_caller_*` 保留参数，
+无身份调用按受信任插件 ADMIN）；Agent 侧 call_* 工具为显式允许名单
+（`[plugin_api].allowlist`，默认空）+ 最低角色 ADMIN + 自身端点永远排除。
 
 **提示词体系**。所有 prompt 经 PromptManager.render() / PromptService.build() 生成，模板在
 `prompt/templates/`（固定中文，无 i18n），builder 注册在 `prompt/builders/`（7 个：
@@ -66,11 +68,11 @@ agent_system / title / polish / planner_board / injection / context_note / subag
 |---|---|
 | [README.md](README.md) | 用户入口：安装 / 配置速查 / 命令用法 / 功能索引 |
 | [docs/](docs/) | LIFECYCLE 生命周期总览 + features/（16 份功能文档）+ history/（4 份归档）；`mkdocs.yml` 配置文档站（GitHub Pages），`.github/workflows/docs.yml` 自动构建部署 |
-| [tests/](tests/) | 测试：58 文件 999 个测试函数，pytest 验证 0 失败 + 文档引用检查（test_doc_links.py） |
+| [tests/](tests/) | 测试：58 文件 1189 个测试函数，pytest 验证 0 失败 + 文档引用检查（test_doc_links.py） |
 
 **目录结构**（散文式，不用多级缩进树）：
 
-- 根目录单文件模块：`plugin.py`（入口，注册 11 个 @Tool / 7 @Command）、`config.py`（11 节配置）、
+- 根目录单文件模块：`plugin.py`（入口，注册 11 个 @Tool / 7 @Command）、`config.py`（12 节配置）、
   `permission.py`、`api_expose.py`、`planner_hooks.py`、`commands.py`、`lifecycle.py`
   （唯一组装点，load_plugin 编排全部依赖）、`_manifest.json`
 - `bus/`：命令总线，消息类型（`bus/messages.py` 纯 dataclass）+ TaskCommandBus 命令路由
@@ -83,7 +85,7 @@ agent_system / title / polish / planner_board / injection / context_note / subag
 - `tools/mcp/`：MCP 工具提供方，MCPConnection（stdio/http/sse）+ MCPManager + presets（内置 fetch/exa 预设）+ fetch_guard（内置 fetch 出站 URL 内网/元数据地址拦截，SSRF 缓解）
 - `prompt/`：提示词系统，manager / service / base + builders/（7）+ templates/（7 中文模板）
 - `tools/`：工具系统三通道（agent 循环工具（含子 Agent 工具 `subagent_tool.py`）/ planner @Tool 工厂 / synthetic 发现工具）+ 发送工具共用实现 `tools/send_message.py` + MCP 工具提供方（tools/mcp/）
-- `tests/`：测试（58 文件，999+ 测试函数，0 失败）+ 文档引用检查（test_doc_links.py）
+- `tests/`：测试（58 文件，1189 个测试函数，0 失败）+ 文档引用检查（test_doc_links.py）
 - `docs/` + `data/`：功能文档（16 + LIFECYCLE + 4 归档）与运行时数据（gitignored）
 
 > 依赖方向：root（plugin.py/lifecycle.py 组装根）→ core（编排）→ executor（执行）→ {tools, prompt, bus} → domain。
@@ -139,7 +141,7 @@ agent_system / title / polish / planner_board / injection / context_note / subag
 uv run --with maibot-plugin-sdk pytest tests/ -q
 ```
 
-共 999 个测试函数，pytest 验证 0 失败。conftest 将项目根挂载为 `oh_mai_agent` 包。
+共 1189 个测试函数，pytest 验证 0 失败。conftest 将项目根挂载为 `oh_mai_agent` 包。
 约定：mock LLM 和 transport，**不 mock 持久化**（使用 real_store 即真 sqlite）。
 
 **Lint / 类型检查**。项目未配置形式化 lint 或类型检查工具（`pyproject.toml` 中无
@@ -160,7 +162,7 @@ refactor(domain): remove planner task level and legacy level map
 
 | 位置 | 问题 | 详见 |
 |---|---|---|
-| `tools/agent/plugin_api_tools.py` | call_* 工具（min_role=USER）可触达本插件 6 个跨插件端点并以 ADMIN 执行，owner 隔离被绕过（user 级 Agent 可列全部任务、取消/暂停/注入任意任务）；跨插件 API 面向受信任插件，历史 `max_level` 配置已废弃 | [04-permission](docs/features/04-permission.md) |
+| `tools/agent/plugin_api_tools.py` | call_* 工具为显式允许名单（`[plugin_api].allowlist`，默认空）+ 最低角色 ADMIN + 自身 6 端点永远排除；跨插件 API 对无身份调用（SDK 通道不携带调用方身份）按受信任插件 ADMIN 执行，身份契约 `_caller_*` 已实现并校验 | [04-permission](docs/features/04-permission.md) |
 | `domain/task_record.py` | 无 schema 版本管理，数据模型升级无法自动迁移 | [01-task-model](docs/features/01-task-model.md) |
 | `plugin.py` | 对外 @Tool 名 `subagent_delete` 与 @Command 名 `task_cancel` 不一致 | [01-task-model](docs/features/01-task-model.md) |
 | `config.py [task]` | `default_timeout_min` 已配置但实际未执行 | [14-config](docs/features/14-config.md) |

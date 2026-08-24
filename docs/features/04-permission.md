@@ -45,13 +45,15 @@ oh-mai-agent 用 guest / user / admin 三级角色划分任务操作与工具访
 
 **工具层。** 每个 ToolDefinition 带 `min_role` 字段，schema 呈现时按角色过滤（tools/registry.py:135），`registry.execute(name, role)` 执行时二次校验（tools/registry.py:198），绕过呈现直接调用也会被拦下。文件工具在此基础上再加 `FileAccessPolicy` 沙箱（tools/agent/file_tools.py:50）：user 角色限制在 `data_dir/files/` 内，admin 可访问宿主机任意路径。文件的角色回调来自 `TaskManager._current_task_role`，读的是 `current_task` ContextVar（executor/context.py:11-13），与 Agent 执行层共用同一份上下文。
 
-### 跨插件 API 的信任模型
+### 跨插件 API 的信任模型与调用方身份
 
 6 个跨插件端点（create / list / get / cancel / inject / history）由 `build_api_handlers`（api_expose.py 的 `build_api_handlers`）构建，在插件加载第 10 步注册到 SDK 动态 API。
 
-信任模型：**跨插件 API 面向受信任插件**。MaiBot 的插件均为部署者手动安装的代码，插件间互信是架构前提，因此所有 handler 统一以 `_CALLER_ROLE = Role.ADMIN`（api_expose.py 的 `_CALLER_ROLE`）调用 TaskManager——TaskCrud / TaskControl 的 owner / guest 检查被有意旁路，`public=True` 使端点对全部插件可见可调。历史版本曾声明 `[api_expose].max_level` 配置用于限制暴露等级，但跨插件调用不携带调用方角色（SDK 的 `api.call` 只传 `api_name/version/args`，Host 侧 `public` 也只是「是否对其他插件开放」的二元开关），等级概念无处安放，该字段已废弃移除，见「[api_expose] 配置节」。
+信任模型：**跨插件 API 面向受信任插件**。MaiBot 的插件均为部署者手动安装的代码，插件间互信是架构前提；SDK 的 `api.call` 通道不携带调用方身份（Host 侧 `_cap_api_call` 只转发 api_name/version/args），因此**无身份参数的调用按 ADMIN 处理**——TaskCrud / TaskControl 的 owner / guest 检查对这类调用旁路，`public=True` 使端点对全部插件可见可调。历史版本曾声明 `[api_expose].max_level` 配置用于限制暴露等级，但跨插件调用不携带调用方角色（Host 侧 `public` 也只是「是否对其他插件开放」的二元开关），等级概念无处安放，该字段已废弃移除，见「[api_expose] 配置节」。
 
-Agent 侧还有一组对应的调用工具：`refresh_plugin_api_tools`（tools/agent/plugin_api_tools.py）动态扫描 `ctx.api.list()`，把每个可见 API 包装成 `call_{api}` 工具，min_role 为 USER。这组工具受工具层 min_role 过滤约束，但底层端点内部以 ADMIN 执行——这是信任模型沿工具链继承的已知边界，详见「已知限制」。
+**调用方身份契约**。handler 接受并校验调用方显式携带的身份参数（`_caller_role` / `_caller_owner` / `_caller_stream_id`，见 api_expose.py 的 `_resolve_caller`）：身份为 ADMIN 时拥有全量能力；身份低于 ADMIN 时**按身份锁定**操作范围——list / get / cancel / inject / history 强制以调用者自身 owner 过滤，create 拒绝为他人 / 跨流建任务，执行角色即调用者身份、不可自升（非法身份值按 GUEST fail-closed，不按缺省 ADMIN 放大）。这些键是保留参数，call_* 工具包装会在透传前剥离，防止经工具通道伪造身份。
+
+Agent 侧还有一组对应的调用工具：`refresh_plugin_api_tools`（tools/agent/plugin_api_tools.py）扫描 `ctx.api.list()`，把**显式允许名单**（`[plugin_api].allowlist`，默认空）内的 API 包装成 `call_{api}` 工具，最低角色固定为 ADMIN，且本插件自身 6 个任务端点**永远不包装**——Agent 操作任务一律走原生 owner 隔离工具（list_my_tasks / create_subtask / inject_task / cancel_task）。历史「user 级 Agent 以 ADMIN 执行跨插件 API」的提权路径由此封闭，详见「已知限制」。
 
 ## 使用与配置
 
@@ -82,11 +84,13 @@ Agent 侧还有一组对应的调用工具：`refresh_plugin_api_tools`（tools/
 
 该配置节已废弃：历史 `max_level` 字段（"guest" / "user" / "admin"，默认 "user"）声明了 API 最大暴露等级，但跨插件调用不携带调用方角色、Host 侧 `public` 也只是二元可见性开关，等级过滤无法实现，字段已从 `config.py` 移除。存量 `config.toml` 中的 `[api_expose]` 节会被静默忽略（`PluginConfigBase` 配置模型 `extra="ignore"`），无需迁移。
 
+Agent 侧 call_* 工具的暴露改由 **`[plugin_api].allowlist`** 显式允许名单控制（默认空 = 不暴露，最低角色 ADMIN），见 [14-config](./14-config.md)。
+
 ### 已知限制
 
-1. **call_* 工具继承 ADMIN 执行（已知边界）**：Agent 侧 `call_{api}` 工具（min_role=USER）可触达本插件 6 个端点并以 `_CALLER_ROLE=ADMIN` 执行，owner 隔离被绕过——user 级 Agent 经 `call_list`（空 owner）可见全部任务，经 `call_cancel` / `call_pause` / `call_inject` 可取消/暂停/注入任意任务。原生 Agent 工具（tools/agent/task_mgmt.py）是 owner 隔离的，两条路径行为不一致。收紧方向：在 call_* 工具集排除本插件敏感端点（方案见 [跨插件 API](./10-cross-plugin-api.md)）。
+1. **跨插件 API 对无身份调用按 ADMIN 执行（信任模型边界）**：SDK 的 `api.call` 通道不携带调用方身份，6 个端点对无身份参数的调用（真实跨插件调用）按 ADMIN 执行，owner 校验旁路——这是「插件间互信」的部署前提（只安装可信插件）。调用方身份契约（`_caller_*` 参数）与低权限身份锁定已实现，但 Host 通道本身无法注入真实身份；低权限身份经 Agent 工具链到达本层的路径已封闭（call_* 工具默认不暴露 + 自身端点永不包装）。
 2. **resolver / config 参数已删除**：`build_api_handlers` 签名收敛为单参数 `build_api_handlers(task_manager)`，未使用的 resolver 与 config 参数已移除。
-3. **任务权限边界**：跨插件 API 无角色门控，任务权限依赖用户交互层与 Agent 工具层的检查；这两层本身是完整的。
+3. **Agent 侧任务操作走原生工具**：call_* 包装不再覆盖本插件自身端点，Agent 的任务能力收敛为原生 owner 隔离工具（list_my_tasks / create_subtask / inject_task / cancel_task）；任务执行历史对 Agent 不再通过 call_history 暴露（命令 `/maitask history` 不受影响）。
 
 ### 相关文档
 

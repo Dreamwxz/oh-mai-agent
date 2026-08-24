@@ -453,6 +453,33 @@ class SubAgentConfig(PluginConfigBase):
     )
 
 
+class PluginApiConfig(PluginConfigBase):
+    """跨插件 API 工具（call_*）配置。
+
+    Agent 侧跨插件 API 工具采用**显式允许名单**：仅名单内的插件 API 会被
+    包装为 ``call_{api}`` 工具，且最低角色固定为 admin；名单为空（默认）
+    时不暴露任何跨插件 API 工具。本插件自身 6 个任务端点永远排除在包装
+    之外（Agent 操作任务请用原生 owner 隔离工具）。
+    """
+
+    __ui_label__ = "跨插件API工具"
+    __ui_order__ = 11
+
+    allowlist: list[str] = Field(
+        default_factory=list,
+        description=(
+            "允许包装为 Agent 工具（call_*）的插件 API 允许名单（如 \"weather.get\"）；"
+            "留空则不暴露任何跨插件 API 工具（默认）。包装后的工具最低角色为 admin，"
+            "本插件自身任务端点始终排除"
+        ),
+        json_schema_extra={
+            "label": "API 允许名单",
+            "hint": "允许包装为 Agent 工具（call_*）的插件 API 名；留空不暴露任何跨插件 API 工具",
+            "order": 0,
+        },
+    )
+
+
 class ShellConfig(PluginConfigBase):
     """宿主机命令执行工具配置。"""
 
@@ -534,6 +561,10 @@ class MaibotAgentConfig(PluginConfigBase):
     subagent: SubAgentConfig = Field(
         default_factory=SubAgentConfig,
         description="子 Agent 配置",
+    )
+    plugin_api: PluginApiConfig = Field(
+        default_factory=PluginApiConfig,
+        description="跨插件 API 工具配置",
     )
     shell: ShellConfig = Field(
         default_factory=ShellConfig,

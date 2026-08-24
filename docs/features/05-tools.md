@@ -39,12 +39,12 @@ Agent 级任务的核心是 LLM 推理加工具调用。每轮 LLM 调用都要�
 
 **Agent 循环通道（tools/agent/）**。Agent 在离线循环中自主调用的全部工具，注册进 ToolRegistry，经 `TaskManager.setup()`（core/task_manager.py 的 `setup`）按顺序注册：任务管理 → 信息 → 文件 → ask_user → send_message → 跨插件 API → 子 Agent → 命令执行。
 
-- 任务管理（tools/agent/task_mgmt.py:25-46）：`list_my_tasks` / `create_subtask` / `inject_task` 三个 discoverable 工具，全部从 `current_task` ContextVar 读取当前任务上下文取 owner。`inject_task` 要求 owner 匹配或 ADMIN（151）。
+- 任务管理（tools/agent/task_mgmt.py:25-46）：`list_my_tasks` / `create_subtask` / `inject_task` / `cancel_task` 四个 discoverable 工具，全部从 `current_task` ContextVar 读取当前任务上下文取 owner。`inject_task` / `cancel_task` 要求 owner 匹配或 ADMIN（cancel_task 经 TaskManager.cancel_task 内部校验）。
 - 信息获取（tools/agent/info_tools.py:33）：5 个 discoverable 工具（search_memory / fetch_history / query_person / search_users / get_frequency），GUEST 可访问。原 `list_plugin_tools` 已移除：它经 `ctx.tool.get_definitions()` 列出 MaiBot 宿主侧全量工具（含插件 planner 层 `list_mcp_tools` / `call_mcp_tool` 等），这些名字在 Agent 循环注册表不可调用，曾导致 LLM 照单调用后反复 tool-not-found 空转。
 - 文件读写（tools/agent/file_tools.py:50）：`read` / `write`，user 级隔离到 `data_dir/files/` 沙箱，admin 可开 `admin_open` 绕过。
 - 提问（tools/agent/ask_tool.py:22）：`ask_user`，唯一 Essential 工具。
 - 消息发送（tools/send_message.py：`build_send_tool`）：`send_message`，目标三选一 —— `stream_id` 直发指定聊天流（如其他用户的流，跳过建流）或 `group_id`/`user_id` 建流，默认润色 + 长文本分割，`polish`/`split` 可选项按场景关闭。**宿主上下文剥离**：MaiBot Host 调用工具时会向 kwargs 注入当前会话上下文（`stream_id`/`chat_id`/`group_id`/`user_id`/`platform`，且仅当 LLM 未提供该键时注入，见 MaiBot `component_query.py` 的 `_build_tool_context_payload`）。`chat_id` 是宿主专用字段（schema 无此参数），且宿主注入的 `stream_id` 恒等于 `chat_id` —— `_send_message_core` 以此为指纹剥离宿主注入的会话上下文，避免「目标流」与「当前会话流」同名冲突（LLM 传 `group_id` 时宿主补 `stream_id`、传 `stream_id` 时宿主补 `group_id` 的误报「只能提供其一」）。
-- 跨插件 API（tools/agent/plugin_api_tools.py）：扫描 `ctx.api.list()` 动态生成 `call_{api_name}` 工具。
+- 跨插件 API（tools/agent/plugin_api_tools.py）：扫描 `ctx.api.list()` 动态生成 `call_{api_name}` 工具——**显式允许名单**（`[plugin_api].allowlist`，默认空 = 不暴露）+ 最低角色 ADMIN + 本插件自身端点永远排除。
 - 命令执行（tools/agent/shell_tools.py 的 `build_shell_tools`）：`run_command`，跨平台（Windows 自动用 cmd.exe，Linux/macOS 用 /bin/sh），仅 admin 可调用，超时强杀进程树 + 输出截断。详见 [命令执行](./16-shell.md)。
 
 **Planner 通道（tools/planner/）**。主 Planner 通过 11 个 `@Tool` 装饰器（plugin.py:158/186/239/262/284/312/334/356/391/400/408）看到的安全子集，其中 7 个 `subagent_*` 后台子代理管理工具 + `search_users` + `send_message` + 2 个 MCP 代理工具。handler 全部懒构建（`_get_planner_tool`，plugin.py:131-150）：`search_users` 走独立工厂，`send_message` 与 Agent 循环版共用 `tools/send_message.py` 的实现，7 个 `subagent_*` 经 `build_task_tools(self._task_manager)`（tools/planner/task_tools.py:31-311）从 TaskManager 门面取，`list_mcp_tools` / `call_mcp_tool` 两个 MCP 代理工具经 `tools/planner/mcp_tools.py` 的工厂函数构建。Planner 调用者角色恒为 ADMIN（`_planner_caller_role`，task_tools.py:26-28），owner 标识为 `planner:{stream_id}`（21-23）。

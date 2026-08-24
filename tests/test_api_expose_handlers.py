@@ -121,6 +121,179 @@ class TestCreateHandler:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# 调用方身份契约（_resolve_caller + 低权限身份锁定）
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestCallerIdentity:
+    @pytest.mark.asyncio
+    async def test_create_with_user_identity_forces_own_owner_and_stream(
+        self, handlers: dict[str, Any], manager: FakeTaskManager,
+    ) -> None:
+        """低权限身份（user）创建任务：未指定归属时以调用者自身
+        owner/stream_id 创建，执行角色为用户、不持久化管理员角色。"""
+        result = await handlers["create"]["handler"](
+            intent="整理笔记", platform="qq",
+            _caller_role="user", _caller_owner="qq:10001",
+            _caller_stream_id="qq:10001",
+        )
+        assert result["success"] is True
+        call = manager.calls["create_task"][0]
+        assert call["owner"] == "qq:10001"  # 身份为权威，锁定为调用者自身
+        assert call["stream_id"] == "qq:10001"
+        assert call["caller_role"] == Role.USER  # 不升权
+
+    @pytest.mark.asyncio
+    async def test_create_with_user_identity_accepts_matching_owner(
+        self, handlers: dict[str, Any], manager: FakeTaskManager,
+    ) -> None:
+        """低权限身份指定与自身一致的 owner/stream_id 时放行。"""
+        result = await handlers["create"]["handler"](
+            intent="x", owner="qq:10001", platform="qq", stream_id="qq:10001",
+            _caller_role="user", _caller_owner="qq:10001",
+            _caller_stream_id="qq:10001",
+        )
+        assert result["success"] is True
+        call = manager.calls["create_task"][0]
+        assert call["owner"] == "qq:10001"
+        assert call["caller_role"] == Role.USER
+
+    @pytest.mark.asyncio
+    async def test_create_with_user_identity_rejects_other_owner(
+        self, handlers: dict[str, Any],
+    ) -> None:
+        """低权限身份不能为他人创建任务（显式指定他人 owner 时拒绝）。"""
+        result = await handlers["create"]["handler"](
+            intent="x", owner="qq:99999", platform="qq", stream_id="qq:10001",
+            _caller_role="user", _caller_owner="qq:10001",
+            _caller_stream_id="qq:10001",
+        )
+        assert result == {"success": False, "error": "权限不足：只能以本人身份创建任务"}
+
+    @pytest.mark.asyncio
+    async def test_create_with_user_identity_rejects_other_stream(
+        self, handlers: dict[str, Any],
+    ) -> None:
+        """低权限身份不能跨流创建任务。"""
+        result = await handlers["create"]["handler"](
+            intent="x", owner="qq:10001", platform="qq", stream_id="qq:other",
+            _caller_role="user", _caller_owner="qq:10001",
+            _caller_stream_id="qq:10001",
+        )
+        assert result == {"success": False, "error": "权限不足：只能在本会话流创建任务"}
+
+    @pytest.mark.asyncio
+    async def test_create_with_invalid_identity_falls_back_guest(
+        self, handlers: dict[str, Any], manager: FakeTaskManager,
+    ) -> None:
+        """非法身份值按 GUEST 处理（fail-closed）：不按缺省 ADMIN 放大权限。
+
+        handler 层把 GUEST 传给 create_task；真实的 guest 拒绝发生在
+        TaskCrud.create_task（core/usecases/task_crud.py）。"""
+        result = await handlers["create"]["handler"](
+            intent="x", owner="qq:10001", platform="qq", stream_id="qq:10001",
+            _caller_role="superadmin",
+        )
+        assert result["success"] is True  # FakeTaskManager 不执行 guest 拒绝
+        assert manager.calls["create_task"][0]["caller_role"] == Role.GUEST
+
+    @pytest.mark.asyncio
+    async def test_create_with_admin_identity_keeps_full_control(
+        self, handlers: dict[str, Any], manager: FakeTaskManager,
+    ) -> None:
+        """admin 身份保留完整指定能力（可为他流 / 他人建任务）。"""
+        result = await handlers["create"]["handler"](
+            intent="x", owner="qq:99999", platform="qq", stream_id="qq:other",
+            _caller_role="admin", _caller_owner="qq:10001",
+            _caller_stream_id="qq:10001",
+        )
+        assert result["success"] is True
+        call = manager.calls["create_task"][0]
+        assert call["owner"] == "qq:99999"
+        assert call["stream_id"] == "qq:other"
+        assert call["caller_role"] == Role.ADMIN
+
+    @pytest.mark.asyncio
+    async def test_list_with_user_identity_forces_own_owner(
+        self, handlers: dict[str, Any], manager: FakeTaskManager,
+    ) -> None:
+        """低权限身份 list：owner 强制为调用者自身，不能按他人 owner 过滤查看。"""
+        result = await handlers["list"]["handler"](
+            owner="qq:99999", _caller_role="user", _caller_owner="qq:10001",
+        )
+        assert result["success"] is True
+        call = manager.calls["list_tasks"][0]
+        assert call["owner"] == "qq:10001"
+        assert call["caller_role"] == Role.USER
+
+    @pytest.mark.asyncio
+    async def test_get_with_user_identity_forces_own_owner(
+        self, store: TaskStore, handlers: dict[str, Any], manager: FakeTaskManager,
+    ) -> None:
+        await store.save(make_task("t1", owner="qq:10001"))
+        result = await handlers["get"]["handler"](
+            task_id="t1", owner="qq:99999", _caller_role="user",
+            _caller_owner="qq:10001",
+        )
+        assert result["success"] is True
+        call = manager.calls["get_task"][0]
+        assert call["owner"] == "qq:10001"
+        assert call["caller_role"] == Role.USER
+
+    @pytest.mark.asyncio
+    async def test_cancel_with_user_identity_forces_own_owner(
+        self, handlers: dict[str, Any], manager: FakeTaskManager,
+    ) -> None:
+        """低权限身份 cancel：owner 锁定为自身，不能取消他人任务。"""
+        result = await handlers["cancel"]["handler"](
+            task_id="t1", owner="qq:99999", _caller_role="user",
+            _caller_owner="qq:10001",
+        )
+        assert result == {"success": True, "message": "已取消"}
+        call = manager.calls["cancel_task"][0]
+        assert call["owner"] == "qq:10001"
+        assert call["caller_role"] == Role.USER
+
+    @pytest.mark.asyncio
+    async def test_inject_with_user_identity_forces_own_owner(
+        self, handlers: dict[str, Any], manager: FakeTaskManager,
+    ) -> None:
+        result = await handlers["inject"]["handler"](
+            task_id="t1", instruction="继续", owner="qq:99999",
+            _caller_role="user", _caller_owner="qq:10001",
+        )
+        assert result == {"success": True, "message": "已注入"}
+        call = manager.calls["modify_task"][0]
+        assert call["owner"] == "qq:10001"
+        assert call["caller_role"] == Role.USER
+
+    @pytest.mark.asyncio
+    async def test_history_with_user_identity_forces_own_owner(
+        self, handlers: dict[str, Any], manager: FakeTaskManager,
+    ) -> None:
+        result = await handlers["history"]["handler"](
+            task_id="t1", owner="qq:99999", _caller_role="user",
+            _caller_owner="qq:10001",
+        )
+        assert result["success"] is True
+        call = manager.calls["task_history"][0]
+        assert call["owner"] == "qq:10001"
+        assert call["caller_role"] == Role.USER
+
+    @pytest.mark.asyncio
+    async def test_admin_identity_keeps_caller_provided_owner(
+        self, handlers: dict[str, Any], manager: FakeTaskManager,
+    ) -> None:
+        """admin 身份（或显式 admin）保留调用方指定 owner 的能力。"""
+        result = await handlers["list"]["handler"](
+            owner="qq:99999", _caller_role="admin", _caller_owner="qq:10001",
+        )
+        assert result["success"] is True
+        call = manager.calls["list_tasks"][0]
+        assert call["owner"] == "qq:99999"
+        assert call["caller_role"] == Role.ADMIN
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # list
 # ═══════════════════════════════════════════════════════════════════════════════
 

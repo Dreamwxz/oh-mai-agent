@@ -23,8 +23,10 @@ def make_role_provider(
     """Create a role resolver callback for a task.
 
     优先使用任务创建时持久化的创建者角色（``task.set_caller_role()``，键
-    ``META_CALLER_ROLE``，由 ``TaskCrud.create`` 写入）：planner / API 创建者
-    均为 ADMIN，任务以创建者角色执行，保证 MCP（user+）等工具对任务可见。
+    ``META_CALLER_ROLE``，由 ``TaskCrud.create`` 写入）：planner 创建者恒为
+    ADMIN；跨插件 API 创建者按调用方身份持久化（无身份调用按受信任插件
+    ADMIN，见 api_expose.py）。任务以创建者角色执行，保证 MCP（user+）等
+    工具对任务可见。
     无该元数据（历史任务 / 内部即时任务）时回退到按 owner/stream_id 解析。
     """
     caller_role = task.caller_role()

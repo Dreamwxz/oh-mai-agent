@@ -46,9 +46,9 @@
 
 ## 使用与配置
 
-### 12 节配置项详解
+### 13 节配置项详解
 
-以下按 12 个配置节列出全部字段。配置键与 `config.py` 字段一一对应。
+以下按 13 个配置节列出全部字段。配置键与 `config.py` 字段一一对应。
 
 #### `[plugin]` — 插件
 
@@ -158,6 +158,19 @@ MCP 工具进入 Agent 工具集的 Discoverable 层，按权限过滤。不支�
 
 子 Agent 由主 Agent 通过工具调用触发，结果回传主 Agent 上下文继续判断；配置经 config_getter 热更新，无需重注册。详见 [子 Agent](./15-subagent.md)。
 
+#### `[plugin_api]` — 跨插件 API 工具
+
+| 字段 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `allowlist` | `list[str]` | `[]` | 允许包装为 Agent 工具（`call_*`）的插件 API 名；留空（默认）不暴露任何跨插件 API 工具 |
+
+Agent 侧跨插件 API 工具采用**显式允许名单**：仅名单内的插件 API 会被包装为
+`call_{api}` 工具，且最低角色固定为 ADMIN（不可配置降低）；本插件自身 6 个
+任务端点（create / list / get / cancel / inject / history）**永远排除**在包装
+之外——Agent 操作任务请用原生 owner 隔离工具（list_my_tasks / create_subtask /
+inject_task / cancel_task）。详见 [跨插件 API](./10-cross-plugin-api.md) 与
+[权限模型](./04-permission.md)。
+
 #### `[shell]` — 命令执行
 
 | 字段 | 类型 | 默认值 | 说明 |
@@ -171,4 +184,4 @@ MCP 工具进入 Agent 工具集的 Discoverable 层，按权限过滤。不支�
 ### 已知限制
 
 - **`default_timeout_min` 已配置但未执行**（config.py:133）。`TaskConfig.default_timeout_min` 声明了 `ask_user` 无回复挂起等待时间的意图，但调度器未读取该值：`waiting_input` 状态的任务不因超时而自动取消或推进，而是永久挂起直到用户回复或手动取消。
-- **跨插件 API 无角色门控（信任模型设计）**。6 个跨插件端点全部 `public=True`、handler 内部以 ADMIN 执行，owner 校验被有意旁路——跨插件调用面向受信任插件。历史 `[api_expose].max_level` 配置因 SDK 无法表达「调用方等级」已废弃移除。详见 [04-permission](./04-permission.md) 与 [10-cross-plugin-api](./10-cross-plugin-api.md)。
+- **跨插件 API 信任模型（无身份时按 ADMIN）**。SDK 的 `api.call` 通道不携带调用方身份，6 个跨插件端点对无身份参数的调用按 ADMIN 执行，owner 校验被有意旁路——跨插件调用面向受信任插件。Agent 侧 call_* 工具已收紧：显式允许名单（默认空）+ 最低角色 ADMIN + 自身端点排除，见 [plugin_api] 配置节与 [10-cross-plugin-api](./10-cross-plugin-api.md)。

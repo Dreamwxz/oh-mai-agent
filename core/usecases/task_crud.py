@@ -101,8 +101,9 @@ class TaskCrud:
         )
         # 持久化创建者角色：执行期角色解析（make_role_provider）在 owner 为
         # 会话 UUID 等无法映射平台/用户形态时无法还原创建者权限（会回落 guest，
-        # 导致 MCP 等 user+ 工具不可见）。planner / API 创建者均为 ADMIN，
-        # 任务理应以创建者角色执行。
+        # 导致 MCP 等 user+ 工具不可见）。planner 创建者恒为 ADMIN；跨插件 API
+        # 创建者按调用方身份持久化（无身份调用按受信任插件 ADMIN，低权限身份
+        # 不可自升，见 api_expose.py 的身份契约）。
         task.set_caller_role(caller_role)
         await self._store.save(task)
         enqueued = await self._scheduler.enqueue(task)
