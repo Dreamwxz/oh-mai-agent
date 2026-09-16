@@ -643,7 +643,7 @@ class AgentLoop:
                 result: dict[str, Any] = await self._ctx.llm.generate_with_tools(
                     prompt=messages,
                     tools=tool_schemas,
-                    model="planner",
+                    task_name="planner",
                     timeout_ms=240000,
                 )
                 if self._cancelled:

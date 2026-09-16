@@ -1,7 +1,7 @@
 """子 Agent 执行循环 — 主 Agent 分派局部工作的轻量嵌套循环。
 
 ``SubAgentLoop`` 在进程内运行（不新增子进程、不持久化、不走命令总线、
-无 ask_user）：每轮经 ``ctx.llm.generate_with_tools(model="planner")``
+无 ask_user）：每轮经 ``ctx.llm.generate_with_tools(task_name="planner")``
 调用 LLM；一轮内的多个工具调用经 ``asyncio.gather`` 并发执行，结果
 按调用顺序追加；无工具调用的一轮即产出最终答案。
 
@@ -128,7 +128,7 @@ class SubAgentLoop:
                 result: dict[str, Any] = await self._ctx.llm.generate_with_tools(
                     prompt=messages,
                     tools=tool_schemas,
-                    model="planner",
+                    task_name="planner",
                     timeout_ms=self._llm_timeout_ms,
                 )
             except Exception as exc:
