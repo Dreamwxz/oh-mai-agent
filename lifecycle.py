@@ -227,7 +227,7 @@ async def llm_title(plugin: "MaibotAgentPlugin", intent: str) -> str:
     try:
         prompt = plugin._pm_service.build("title", intent=intent)
         result = await plugin.ctx.llm.generate(
-            prompt=prompt, model="utils", timeout_ms=60000,
+            prompt=prompt, task_name="utils", timeout_ms=60000,
         )
         title = str(result.get("response", "")).strip()
         if title:

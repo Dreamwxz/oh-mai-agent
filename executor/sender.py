@@ -175,7 +175,7 @@ class PolishService:
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": result},
                 ],
-                model="replyer",
+                task_name="replyer",
                 timeout_ms=120000,
             )
             if isinstance(llm_result, dict):
